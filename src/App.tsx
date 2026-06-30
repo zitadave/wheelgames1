@@ -8,6 +8,7 @@ import { Users, Clock, History, AlertCircle, Coins, Moon, Sun, Settings, X, Help
 import { motion, AnimatePresence } from 'motion/react';
 import confetti from 'canvas-confetti';
 import { playWin, playLoss } from './utils/sound';
+import { triggerHaptic } from './utils/haptic';
 
 const SOCKET_URL = window.location.origin;
 
@@ -232,6 +233,7 @@ export default function App() {
         if (!showResult && lastWinner !== state.winner) {
           setShowResult(true);
           setLastWinner(state.winner);
+          triggerHaptic('notification', 'success');
           let fireConfetti = confetti as any;
           if (typeof confetti === 'function') {
             fireConfetti = confetti;

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { motion, useMotionValue, useTransform, animate } from 'motion/react';
 import { playTick, playSpinStart } from '../utils/sound';
+import { triggerHaptic } from '../utils/haptic';
 
 interface WheelProps {
   status: "betting" | "balancing" | "spinning" | "result";
@@ -12,6 +13,7 @@ export const Wheel = React.memo(function Wheel({ status, winner, soundTicks }: W
   const rotate = useMotionValue(0);
   const prevStatus = useRef(status);
   const lastTickSegment = useRef(0);
+  const lastTickTime = useRef(0);
   const soundTicksRef = useRef(soundTicks);
 
   useEffect(() => {
@@ -24,33 +26,46 @@ export const Wheel = React.memo(function Wheel({ status, winner, soundTicks }: W
     if (status === 'spinning' && winner && prevStatus.current !== 'spinning') {
       const orderAtTop = [1, 6, 5, 4, 3, 2];
       const targetIndex = orderAtTop.indexOf(winner);
-      const targetRotation = 360 * 10 + (targetIndex * 60); // 10 full spins
+      // Introduce a realistic random landing offset within the slice (-20 to +20 deg) to keep suspense alive!
+      const randomOffset = (Math.random() - 0.5) * 40;
+      // Accelerates rapidly and covers plenty of distance
+      const targetRotation = 360 * 80 + (targetIndex * 60) + randomOffset; 
 
+      // Launch haptic and sound
+      triggerHaptic('impact', 'heavy');
       if (soundTicksRef.current) playSpinStart();
 
       const currentRot = rotate.get() % 360;
       rotate.set(currentRot);
+      
+      // Extremely rapid launch [0.05, 0.95, 0.05, 1.0] and smooth, heavy deceleration over 60 seconds
       animationControls = animate(rotate, targetRotation, {
-        duration: 6,
-        ease: [0.3, 0.9, 0.4, 1.0],
+        duration: 60,
+        ease: [0.05, 0.95, 0.05, 1.0],
         onUpdate: (latest) => {
           const currentSegment = Math.floor((latest + 30) / 60);
           if (currentSegment !== lastTickSegment.current) {
-            if (soundTicksRef.current) playTick();
+            const now = Date.now();
+            // Rate-limit the click sounds and haptic pulses at high speeds for professional audio feel
+            if (now - lastTickTime.current > 35) {
+              if (soundTicksRef.current) playTick();
+              triggerHaptic('impact', 'light');
+              lastTickTime.current = now;
+            }
             lastTickSegment.current = currentSegment;
           }
         }
       });
     } else if (status === 'betting' || status === 'balancing') {
+      // Stationary states: Stop completely during player selection, closing time, and balancing.
+      if (animationControls) {
+        animationControls.stop();
+      }
+      // Gently keep current resting rotation normalized
       const currentRot = rotate.get() % 360;
       rotate.set(currentRot);
-      animationControls = animate(rotate, currentRot + 360, {
-        duration: 40,
-        ease: "linear",
-        repeat: Infinity,
-      });
     } else if (status === 'result') {
-      // do nothing, let it rest
+      // Resting on result
     }
     prevStatus.current = status;
 
@@ -67,42 +82,46 @@ export const Wheel = React.memo(function Wheel({ status, winner, soundTicks }: W
     const segmentIndex = Math.floor(((normalized + 30) % 360) / 60);
     const orderAtTop = [1, 6, 5, 4, 3, 2];
     const num = orderAtTop[segmentIndex % 6];
-    return num % 2 === 0 ? '#111111' : '#dc2626'; // black for even, red for odd
+    return num % 2 === 0 ? '#dc2626' : '#111111'; // red for even, black for odd
   });
 
   const segments = [1, 2, 3, 4, 5, 6];
 
   return (
     <div className="relative w-[280px] h-[280px] mx-auto my-6">
-      {/* 3D Elevated Pointer */}
+      {/* Elevated 3D Pointer */}
       <motion.div 
-        className="absolute top-[-42px] left-1/2 -translate-x-1/2 w-12 h-14 z-20 drop-shadow-[0_8px_10px_rgba(0,0,0,0.4)] pointer-events-none"
+        className="absolute top-[-36px] left-1/2 -translate-x-1/2 w-10 h-12 z-20 drop-shadow-[0_8px_12px_rgba(0,0,0,0.6)] pointer-events-none"
         style={{ 
           color: pointerColor,
         }}
       >
-        <svg viewBox="0 0 48 56" className="w-full h-full filter drop-shadow-[0_2px_3px_rgba(0,0,0,0.2)]">
-          {/* Left side face (Bevel highlight) */}
+        <svg viewBox="0 0 48 56" className="w-full h-full filter drop-shadow-[0_2px_4px_rgba(0,0,0,0.4)]">
+          {/* Left-side Highlight Face */}
           <path 
-            d="M 24 50 L 6 10 L 24 10 Z" 
+            d="M 24 52 L 4 4 L 24 4 Z" 
             fill="currentColor"
           />
-          {/* Semi-transparent highlight white */}
           <path 
-            d="M 24 50 L 6 10 L 24 10 Z" 
+            d="M 24 52 L 4 4 L 24 4 Z" 
             fill="white"
             fillOpacity="0.25"
           />
-          {/* Right side face (Bevel shadow) */}
+          {/* Right-side Shadow Face */}
           <path 
-            d="M 24 50 L 24 10 L 42 10 Z" 
+            d="M 24 52 L 24 4 L 44 4 Z" 
             fill="currentColor"
           />
-          {/* Semi-transparent shadow black */}
           <path 
-            d="M 24 50 L 24 10 L 42 10 Z" 
+            d="M 24 52 L 24 4 L 44 4 Z" 
             fill="black"
-            fillOpacity="0.35"
+            fillOpacity="0.3"
+          />
+          {/* Center crease ridge */}
+          <line 
+            x1="24" y1="4" x2="24" y2="52" 
+            stroke="rgba(255, 255, 255, 0.4)" 
+            strokeWidth="1.5"
           />
         </svg>
       </motion.div>
@@ -125,7 +144,7 @@ export const Wheel = React.memo(function Wheel({ status, winner, soundTicks }: W
                   cy="50"
                   r="25"
                   fill="transparent"
-                  stroke={isEven ? '#111111' : '#dc2626'}
+                  stroke={isEven ? '#dc2626' : '#111111'}
                   strokeWidth="50"
                   strokeDasharray={`${segmentLength} ${C}`}
                   strokeDashoffset={-segmentLength * i}

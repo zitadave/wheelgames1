@@ -26,7 +26,7 @@ const MAX_CAPACITY = 200;
 const BETTING_TIME = 60; // 0-55 open, 55-60 soft close (UI handles soft close)
 const BALANCING_TIME = 10;
 const SPINNING_TIME = 60;
-const RESULT_TIME = 10; // Show result before restarting
+const RESULT_TIME = 6; // Show result before restarting
 
 class Room {
   state: RoomState;

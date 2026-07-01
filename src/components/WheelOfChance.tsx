@@ -9,6 +9,8 @@ interface WheelOfChanceProps {
   isDarkMode: boolean;
   soundTicks: boolean;
   onBack?: () => void;
+  socket?: any;
+  userId?: string;
 }
 
 type GamePhase = 'lobby' | 'countdown' | 'spinning' | 'announcing' | 'complete';
@@ -20,6 +22,8 @@ export function WheelOfChance({
   isDarkMode,
   soundTicks: parentSoundTicks,
   onBack,
+  socket,
+  userId
 }: WheelOfChanceProps) {
   // Local sound state
   const [soundEnabled, setSoundEnabled] = useState(parentSoundTicks);
@@ -205,7 +209,11 @@ export function WheelOfChance({
     if (claimedSlots[num]) {
       if (claimedSlots[num].isSelf) {
         // Unclaim
-        setBalance(prev => prev + entryFee);
+        setBalance(prev => {
+          const newBalance = prev + entryFee;
+          socket?.emit('logTransaction', { userId, amount: entryFee, type: 'refund', description: `Released Slot #${num} (${activeRoom} Room)`, newBalance });
+          return newBalance;
+        });
         setMockTransactions(prev => [
           { id: Date.now(), type: 'bet', desc: `Released Slot #${num} (${activeRoom} Room)`, amount: entryFee, date: 'Just now', positive: true },
           ...prev
@@ -230,7 +238,11 @@ export function WheelOfChance({
       return;
     }
 
-    setBalance(prev => prev - entryFee);
+    setBalance(prev => {
+      const newBalance = prev - entryFee;
+      socket?.emit('logTransaction', { userId, amount: -entryFee, type: 'bet', description: `Secured Slot #${num} (P2P ${activeRoom} Room)`, newBalance });
+      return newBalance;
+    });
     setMockTransactions(prev => [
       { id: Date.now(), type: 'bet', desc: `Secured Slot #${num} (P2P ${activeRoom} Room)`, amount: -entryFee, date: 'Just now', positive: false },
       ...prev
@@ -330,7 +342,12 @@ export function WheelOfChance({
         const isSelfWinner = claim?.isSelf;
 
         if (isSelfWinner) {
-          setBalance(b => b + payoutAmount);
+          setBalance(b => {
+            const newBalance = b + payoutAmount;
+            socket?.emit('logGamePlay', { userId, gameType: 'Chance ' + activeRoom, result: `${tierName} Win`, winAmount: payoutAmount, newBalance });
+            socket?.emit('logTransaction', { userId, amount: payoutAmount, type: 'win', description: `🏆 P2P ${tierName} Grand Victory (#${winningSectorVal})`, newBalance });
+            return newBalance;
+          });
           setMockTransactions(prev => [
             { id: Date.now(), type: 'reward', desc: `🏆 P2P ${tierName} Grand Victory (#${winningSectorVal})`, amount: payoutAmount, date: 'Just now', positive: true },
             ...prev

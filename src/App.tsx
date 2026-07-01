@@ -20,10 +20,25 @@ interface HistoryItem {
   netWin: number;
 }
 
+const getTelegramUser = () => {
+  if (typeof window !== 'undefined' && window.Telegram && window.Telegram.WebApp) {
+    window.Telegram.WebApp.ready();
+    const user = window.Telegram.WebApp.initDataUnsafe?.user;
+    return user || null;
+  }
+  return null;
+};
+
 export default function App() {
+  const [tgUser] = useState(getTelegramUser);
   const [socket, setSocket] = useState<Socket | null>(null);
-  const [userId] = useState(() => 'user_' + Math.floor(Math.random() * 100000));
-  const [username] = useState(() => 'Player_' + Math.floor(Math.random() * 1000));
+  
+  const [userId] = useState(() => tgUser?.id ? tgUser.id.toString() : 'user_' + Math.floor(Math.random() * 100000));
+  const [username] = useState(() => tgUser?.username || tgUser?.first_name || 'Player_' + Math.floor(Math.random() * 1000));
+  const [photoUrl] = useState(() => tgUser?.photo_url || null);
+  const [firstName] = useState(() => tgUser?.first_name || '');
+  const [lastName] = useState(() => tgUser?.last_name || '');
+
   const [balance, setBalance] = useState(100000); // 100k start
   const [currentRoom, setCurrentRoom] = useState<string>('Main-Room');
   const [roomsStatus, setRoomsStatus] = useState<Record<string, { status: string, even: number, odd: number }>>({});
@@ -72,24 +87,20 @@ export default function App() {
   const [isWalletOpen, setIsWalletOpen] = useState<boolean>(false);
   const [ledgerTab, setLedgerTab] = useState<'play' | 'transactions'>('play');
   const [isJackpotTheaterMode, setIsJackpotTheaterMode] = useState<boolean>(false);
-  const [mockTransactions, setMockTransactions] = useState<any[]>([
-    { id: 1, type: 'reward', desc: 'Welcome Bonus Credits', amount: 5000, date: 'Just now', positive: true },
-    { id: 2, type: 'bet', desc: 'Even Side Placement (Round #92)', amount: -1000, date: '2 mins ago', positive: false },
-    { id: 3, type: 'win', desc: 'Round Winning Bonus Multiplier', amount: 2000, date: '3 mins ago', positive: true },
-  ]);
+  const [mockTransactions, setMockTransactions] = useState<any[]>([]);
+  const [gameHistory, setGameHistory] = useState<any[]>([]);
 
-  const [gameHistory, setGameHistory] = useState<any[]>([
-    { id: 'RND-8492A', type: 'Jackpot VIP Grand', bet: 10000, numbers: 'Spot #24', result: 'Loss', change: -10000, date: '10 mins ago', status: 'Completed' },
-    { id: 'RND-88392B', type: 'Chance 1-10', bet: 500, numbers: 'Spot #7', result: '1st Place Win', change: 4000, date: '15 mins ago', status: 'Completed' },
-    { id: 'RND-12492C', type: 'Even/Odd', bet: 2000, numbers: 'Even (ሞላ)', result: 'Loss', change: -2000, date: '1 hour ago', status: 'Completed' },
-    { id: 'RND-94829D', type: 'Chance 1-20', bet: 1000, numbers: 'Spot #19', result: '2nd Place Win', change: 3000, date: '2 hours ago', status: 'Completed' },
-    { id: 'RND-77392E', type: 'Jackpot Mini', bet: 1000, numbers: 'Spot #42', result: 'Loss', change: -1000, date: '3 hours ago', status: 'Completed' },
-  ]);
-
-  const [depositAmount, setDepositAmount] = useState<string>('5000');
-  const [withdrawAmount, setWithdrawAmount] = useState<string>('2000');
-  const [withdrawHandle, setWithdrawHandle] = useState<string>('');
+  const [botUsername, setBotUsername] = useState<string>('');
   const [copiedId, setCopiedId] = useState<boolean>(false);
+
+  useEffect(() => {
+    fetch('/api/bot-info')
+      .then(res => res.json())
+      .then(data => {
+        if (data.username) setBotUsername(data.username);
+      })
+      .catch(console.error);
+  }, []);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -210,6 +221,9 @@ export default function App() {
     const onConnect = () => {
       socket.emit('joinRoom', currentRoom);
       socket.emit('getRoomsStatus');
+      socket.emit('syncUser', userId, username, photoUrl, firstName, lastName);
+      socket.emit('getUserTransactions', userId);
+      socket.emit('getUserGameLogs', userId);
     };
 
     if (socket.connected) {
@@ -217,11 +231,52 @@ export default function App() {
     }
 
     socket.on('connect', onConnect);
+    
+    socket.on('syncBalance', (serverBalance: number) => {
+      setBalance(serverBalance);
+    });
+
+    socket.on('balanceUpdated', (data: { userId: string, balance: number }) => {
+      if (data.userId === userId) {
+        setBalance(data.balance);
+        showNotification(`Wallet updated to ${data.balance.toLocaleString()} ETB`, 'success');
+        socket.emit('getUserTransactions', userId);
+      }
+    });
+
+    socket.on('userTransactions', (data: any[]) => {
+      const formatted = data.map(tx => ({
+        id: tx.id,
+        type: tx.type === 'win' || tx.type === 'reward' || tx.type === 'refund' ? 'reward' : 'bet',
+        desc: tx.description,
+        amount: tx.amount,
+        date: new Date(tx.created_at).toLocaleString(),
+        positive: tx.amount > 0
+      }));
+      setMockTransactions(formatted);
+    });
+
+    socket.on('userGameLogs', (data: any[]) => {
+      const formatted = data.map(log => ({
+        id: log.id.slice(0, 8).toUpperCase(),
+        type: log.game_type,
+        bet: 0, // We didn't log bet specifically in game_logs for now, maybe derive or leave 0
+        numbers: '-',
+        result: log.result,
+        change: log.win_amount,
+        date: new Date(log.created_at).toLocaleString(),
+        status: 'Completed'
+      }));
+      setGameHistory(formatted);
+    });
 
     return () => {
       socket.off('connect', onConnect);
+      socket.off('syncBalance');
+      socket.off('userTransactions');
+      socket.off('userGameLogs');
     };
-  }, [socket, currentRoom]);
+  }, [socket, currentRoom, userId, username]);
 
   useEffect(() => {
     if (!socket) return;
@@ -258,9 +313,18 @@ export default function App() {
                 // Determine net win based on fees
                 const feeRate = myBet.amount > 10000 ? 0.05 : 0.10;
                 netWin = myBet.amount * (1 - feeRate);
-                setBalance(b => b + myBet.amount + netWin);
+                setBalance(b => {
+                  const newBalance = b + myBet.amount + netWin;
+                  socket?.emit('logGamePlay', { userId, gameType: 'Even/Odd', result: 'Win', winAmount: myBet.amount + netWin, newBalance });
+                  socket?.emit('logTransaction', { userId, amount: myBet.amount + netWin, type: 'win', description: 'Even/Odd Win', newBalance });
+                  return newBalance;
+                });
                 if (soundAlertsRef.current) playWin();
              } else {
+                setBalance(b => {
+                  socket?.emit('logGamePlay', { userId, gameType: 'Even/Odd', result: 'Loss', winAmount: 0, newBalance: b });
+                  return b;
+                });
                 if (soundAlertsRef.current) playLoss();
              }
 
@@ -358,7 +422,11 @@ export default function App() {
       setIsPlacingBet(false);
 
       if (res && res.success) {
-         setBalance(b => b - diff);
+         setBalance(b => {
+           const newBalance = b - diff;
+           socket.emit('logTransaction', { userId, amount: -diff, type: 'bet', description: 'Even/Odd Bet', newBalance });
+           return newBalance;
+         });
          setPulseSide(side);
          setTimeout(() => setPulseSide(null), 300);
          if (window.Telegram?.WebApp?.HapticFeedback) {
@@ -468,9 +536,13 @@ export default function App() {
               {/* Profile Icon Button */}
               <button
                 onClick={() => setActiveTab('profile')}
-                className="p-1.5 rounded-full bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-700 transition-all active:scale-95 cursor-pointer"
+                className="p-1 rounded-full bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-700 transition-all active:scale-95 cursor-pointer relative w-8 h-8 flex items-center justify-center overflow-hidden"
               >
-                <User className="w-4 h-4" />
+                {photoUrl ? (
+                   <img src={photoUrl} alt="Avatar" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                ) : (
+                   <User className="w-4 h-4" />
+                )}
               </button>
             </div>
           </header>
@@ -684,6 +756,8 @@ export default function App() {
                   isDarkMode={isDarkMode}
                   soundTicks={soundTicks}
                   onTheaterModeChange={setIsJackpotTheaterMode}
+                  socket={socket}
+                  userId={userId}
                 />
               </motion.div>
             )}
@@ -705,6 +779,8 @@ export default function App() {
                   isDarkMode={isDarkMode}
                   soundTicks={soundTicks}
                   onBack={() => setActiveTab('even_odd')}
+                  socket={socket}
+                  userId={userId}
                 />
               </motion.div>
             )}
@@ -723,11 +799,17 @@ export default function App() {
               >
                 {/* User Info Card */}
                 <div className="bg-white dark:bg-gray-900 rounded-2xl p-4 border border-gray-200 dark:border-gray-800 transition-colors text-center shadow-xs">
-                  <div className="relative mx-auto w-16 h-16 rounded-full bg-blue-600 flex items-center justify-center font-bold text-2xl text-white shadow-md">
-                    {username.charAt(0).toUpperCase()}
-                    <div className="absolute -bottom-1 -right-1 bg-green-500 w-4 h-4 rounded-full border-2 border-white dark:border-gray-900" />
+                  <div className="relative mx-auto w-16 h-16 rounded-full bg-blue-600 flex items-center justify-center font-bold text-2xl text-white shadow-md overflow-hidden">
+                    {photoUrl ? (
+                      <img src={photoUrl} alt="Avatar" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                    ) : (
+                      username.charAt(0).toUpperCase()
+                    )}
+                    <div className="absolute -bottom-1 -right-1 bg-green-500 w-4 h-4 rounded-full border-2 border-white dark:border-gray-900 z-10" />
                   </div>
-                  <h2 className="text-base font-black text-gray-900 dark:text-white mt-3">{username}</h2>
+                  <h2 className="text-base font-black text-gray-900 dark:text-white mt-3">
+                    {firstName || lastName ? `${firstName} ${lastName}`.trim() : username}
+                  </h2>
                   
                   {/* Account id and quick copy button */}
                   <div className="flex items-center justify-center gap-1.5 mt-1">
@@ -748,11 +830,16 @@ export default function App() {
                   <div className="grid grid-cols-2 gap-2 mt-4 bg-gray-50 dark:bg-gray-950/40 p-3 rounded-xl border border-gray-100 dark:border-gray-800/60 text-center">
                     <div>
                       <div className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Matches Spin</div>
-                      <div className="text-sm font-black text-gray-800 dark:text-gray-200">92</div>
+                      <div className="text-sm font-black text-gray-800 dark:text-gray-200">{gameHistory.length}</div>
                     </div>
                     <div>
                       <div className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Accrued Wins</div>
-                      <div className="text-sm font-black text-green-500">54.3%</div>
+                      <div className="text-sm font-black text-green-500">
+                        {gameHistory.length > 0 ? 
+                          `${((gameHistory.filter(log => log.change > 0 || log.result?.includes('Win') || log.result?.includes('Won')).length / gameHistory.length) * 100).toFixed(1)}%` 
+                          : '0.0%'
+                        }
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -961,89 +1048,42 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Deposit and Withdrawal Simulated Panels */}
-                <div className="bg-gray-50 dark:bg-gray-950 rounded-2xl p-4 border border-gray-200 dark:border-gray-800 transition-colors shadow-xs space-y-4">
-                  {/* Quick deposit simulator */}
-                  <div>
-                    <h3 className="text-xs font-black uppercase text-gray-400 tracking-wider flex items-center gap-1.5 mb-2 flex">
-                      <ArrowDownLeft className="w-4 h-4 text-green-500 mr-1" /> Simulated Deposit Sandbox
-                    </h3>
-                    <div className="flex gap-2">
-                      <input
-                        type="number"
-                        placeholder="Amount to deposit"
-                        value={depositAmount}
-                        onChange={(e) => setDepositAmount(e.target.value)}
-                        className="flex-1 bg-white dark:bg-gray-900 px-3 py-2 rounded-xl text-xs font-bold border border-gray-200 dark:border-gray-800 focus:outline-none focus:ring-1 focus:ring-blue-500 text-gray-900 dark:text-gray-100"
-                      />
+                {/* Deposit and Withdrawal Bot Redirect Panels */}
+                <div className="bg-gray-50 dark:bg-gray-950 rounded-2xl p-4 border border-gray-200 dark:border-gray-800 transition-colors shadow-xs space-y-4 text-center">
+                  <div className="p-2">
+                    <h3 className="text-sm font-black text-gray-900 dark:text-white mb-1">Deposit & Withdrawal</h3>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+                      All financial transactions are handled securely through our official Telegram Bot. Your balance will update instantly upon approval.
+                    </p>
+                    <div className="flex gap-2 justify-center">
                       <button
                         onClick={() => {
-                          const amt = parseInt(depositAmount);
-                          if (amt > 0) {
-                            setBalance(prev => prev + amt);
-                            setMockTransactions(prev => [
-                              { id: Date.now(), type: 'reward', desc: 'Simulated Sandbox Deposit', amount: amt, date: 'Just now', positive: true },
-                              ...prev
-                            ]);
-                            showNotification(`Deposited ${amt.toLocaleString()} Simulated Coins!`, 'success');
-                            confetti({ particleCount: 30, spread: 40, origin: { y: 0.8 } });
+                          const tgUsername = botUsername || 'YOUR_BOT_USERNAME';
+                          if (window.Telegram?.WebApp) {
+                            window.Telegram.WebApp.openTelegramLink(`https://t.me/${tgUsername}?start=deposit`);
+                          } else {
+                            window.open(`https://t.me/${tgUsername}?start=deposit`, '_blank');
+                            showNotification("Opening Telegram Bot...", "success");
                           }
                         }}
-                        className="bg-green-600 hover:bg-green-500 text-white font-black px-4 py-2 rounded-xl text-xs flex items-center gap-1 transition-all active:scale-95 cursor-pointer"
+                        className="flex-1 bg-green-600 hover:bg-green-500 text-white font-black px-4 py-3 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95 cursor-pointer"
                       >
-                        <Plus className="w-3.5 h-3.5" /> Deposit
+                        <ArrowDownLeft className="w-4 h-4" /> Deposit via Bot
                       </button>
-                    </div>
-                  </div>
-
-                  {/* Cashout/withdrawal panel */}
-                  <div className="border-t border-gray-200 dark:border-gray-800 pt-3">
-                    <h3 className="text-xs font-black uppercase text-gray-400 tracking-wider flex items-center gap-1.5 mb-2 flex">
-                      <ArrowUpRight className="w-4 h-4 text-red-500 mr-1" /> Automated Tele/E-Birr Withdrawal
-                    </h3>
-                    <div className="space-y-2">
-                      <input
-                        type="text"
-                        placeholder="Telegram username (e.g. @tele_birr_user)"
-                        value={withdrawHandle}
-                        onChange={(e) => setWithdrawHandle(e.target.value)}
-                        className="w-full bg-white dark:bg-gray-900 px-3 py-2 rounded-xl text-xs font-bold border border-gray-200 dark:border-gray-800 focus:outline-none focus:ring-1 focus:ring-blue-500 text-gray-900 dark:text-gray-100"
-                      />
-                      <div className="flex gap-2">
-                        <input
-                          type="number"
-                          placeholder="Withdraw amount"
-                          value={withdrawAmount}
-                          onChange={(e) => setWithdrawAmount(e.target.value)}
-                          className="flex-1 bg-white dark:bg-gray-900 px-3 py-2 rounded-xl text-xs font-bold border border-gray-200 dark:border-gray-800 focus:outline-none focus:ring-1 focus:ring-blue-500 text-gray-900 dark:text-gray-100"
-                        />
-                        <button
-                          onClick={() => {
-                            const amt = parseInt(withdrawAmount);
-                            if (isNaN(amt) || amt <= 0) {
-                              showNotification("Please specify a valid withdrawal amount.", "error");
-                              return;
-                            }
-                            if (balance < amt) {
-                              showNotification("Insufficient balance for withdrawal!", "error");
-                              return;
-                            }
-                            if (!withdrawHandle.trim()) {
-                              showNotification("Please specify your Telegram Username first.", "error");
-                              return;
-                            }
-                            setBalance(prev => prev - amt);
-                            setMockTransactions(prev => [
-                              { id: Date.now(), type: 'bet', desc: `Simulated Cashout (${withdrawHandle})`, amount: -amt, date: 'Just now', positive: false },
-                              ...prev
-                            ]);
-                            showNotification(`Withdrawal of ${amt.toLocaleString()} submitted successfully!`, 'success');
-                          }}
-                          className="bg-blue-600 hover:bg-blue-500 text-white font-black px-4 py-2 rounded-xl text-xs flex items-center gap-1 transition-all active:scale-95 cursor-pointer"
-                        >
-                          Withdraw
-                        </button>
-                      </div>
+                      <button
+                        onClick={() => {
+                          const tgUsername = botUsername || 'YOUR_BOT_USERNAME';
+                          if (window.Telegram?.WebApp) {
+                            window.Telegram.WebApp.openTelegramLink(`https://t.me/${tgUsername}?start=withdraw`);
+                          } else {
+                            window.open(`https://t.me/${tgUsername}?start=withdraw`, '_blank');
+                            showNotification("Opening Telegram Bot...", "success");
+                          }
+                        }}
+                        className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-black px-4 py-3 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95 cursor-pointer"
+                      >
+                        <ArrowUpRight className="w-4 h-4" /> Withdraw via Bot
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -1106,9 +1146,11 @@ export default function App() {
                               </span>
                               <span className="text-[10px] text-gray-400 font-mono font-bold">{log.id}</span>
                             </div>
-                            <div className="text-xs font-bold text-gray-700 dark:text-gray-300">
-                              Bet: {log.bet.toLocaleString()} ETB <span className="text-gray-400 mx-1">•</span> Choice: {log.numbers}
-                            </div>
+                            {log.bet > 0 && (
+                              <div className="text-xs font-bold text-gray-700 dark:text-gray-300">
+                                Bet: {log.bet.toLocaleString()} ETB <span className="text-gray-400 mx-1">•</span> Choice: {log.numbers}
+                              </div>
+                            )}
                             <div className="text-[10px] text-gray-400">
                               {log.date}
                             </div>

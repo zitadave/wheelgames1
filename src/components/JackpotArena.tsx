@@ -11,6 +11,8 @@ interface JackpotArenaProps {
   isDarkMode: boolean;
   soundTicks: boolean;
   onTheaterModeChange?: (active: boolean) => void;
+  socket?: any;
+  userId?: string;
 }
 
 type JackpotTier = 'mini' | 'grand';
@@ -28,6 +30,8 @@ export function JackpotArena({
   isDarkMode,
   soundTicks,
   onTheaterModeChange,
+  socket,
+  userId
 }: JackpotArenaProps) {
   const [tier, setTier] = useState<JackpotTier>('mini');
   
@@ -378,7 +382,12 @@ export function JackpotArena({
       else if (drawIndex === 2) prize = currentConfig.p2;
       else prize = currentConfig.p3;
 
-      setBalance(prev => prev + prize);
+      setBalance(prev => {
+        const newBalance = prev + prize;
+        socket?.emit('logGamePlay', { userId, gameType: 'Jackpot', result: `Won ${drawIndex}st Place`, winAmount: prize, newBalance });
+        socket?.emit('logTransaction', { userId, amount: prize, type: 'win', description: `🏆 Jackpot ${drawIndex}st Place Win!`, newBalance });
+        return newBalance;
+      });
       setMockTransactions(prev => [
         { id: Date.now(), type: 'win', desc: `🏆 Jackpot ${drawIndex}st Place Win!`, amount: prize, date: 'Just now', positive: true },
         ...prev
@@ -421,7 +430,11 @@ export function JackpotArena({
     if (activeGrid[num]) {
       if (activeGrid[num].isSelf) {
         // Unclaim
-        setBalance(prev => prev + currentConfig.entry);
+        setBalance(prev => {
+          const newBalance = prev + currentConfig.entry;
+          socket?.emit('logTransaction', { userId, amount: currentConfig.entry, type: 'refund', description: `Refund Spot #${num}`, newBalance });
+          return newBalance;
+        });
         setTargetGrid(prev => {
           const next = { ...prev };
           delete next[num];
@@ -439,7 +452,11 @@ export function JackpotArena({
       return;
     }
 
-    setBalance(prev => prev - currentConfig.entry);
+    setBalance(prev => {
+      const newBalance = prev - currentConfig.entry;
+      socket?.emit('logTransaction', { userId, amount: -currentConfig.entry, type: 'bet', description: `Secured Spot #${num} in Jackpot`, newBalance });
+      return newBalance;
+    });
     setMockTransactions(prev => [
       { id: Date.now(), type: 'bet', desc: `Secured Spot #${num} in Jackpot`, amount: -currentConfig.entry, date: 'Just now', positive: false },
       ...prev

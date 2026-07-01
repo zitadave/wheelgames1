@@ -286,8 +286,121 @@ export function initGameEngine(io: Server) {
     "Main-Room": new Room("Main-Room", io),
   };
 
+  // Setup Realtime Listener for Balance Changes
+  import("./supabase.js").then(({ supabase }) => {
+    if (supabase) {
+      supabase.channel('public:users')
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'users' }, (payload) => {
+          const updatedUser = payload.new;
+          if (updatedUser && updatedUser.id) {
+            io.to(`user_${updatedUser.id}`).emit('syncBalance', updatedUser.balance);
+          }
+        })
+        .subscribe();
+    }
+  }).catch(console.error);
+
   io.on("connection", (socket: Socket) => {
     let currentRoomId: string | null = null;
+    
+    // Auth & Balance syncing
+    socket.on("syncUser", async (userId: string, username: string, photoUrl?: string, firstName?: string, lastName?: string) => {
+      // Join a personal room to receive private realtime updates
+      socket.join(`user_${userId}`);
+      try {
+        const { supabase } = await import("./supabase.js");
+        if (!supabase) return;
+        
+        // Upsert user with Telegram info
+        const { data, error } = await supabase
+          .from("users")
+          .upsert({ 
+            id: userId, 
+            username,
+            ...(photoUrl ? { photo_url: photoUrl } : {}),
+            ...(firstName ? { first_name: firstName } : {}),
+            ...(lastName ? { last_name: lastName } : {})
+          }, { onConflict: 'id' })
+          .select()
+          .single();
+          
+        if (!error && data) {
+           socket.emit("syncBalance", data.balance);
+        }
+      } catch (e) {
+        console.error("Sync user error:", e);
+      }
+    });
+
+    socket.on("logTransaction", async (data: { userId: string, amount: number, type: string, description: string, newBalance: number }) => {
+      try {
+        const { supabase } = await import("./supabase.js");
+        if (!supabase) return;
+        
+        await supabase.from("users").update({ balance: data.newBalance }).eq("id", data.userId);
+        await supabase.from("transactions").insert({
+           user_id: data.userId,
+           amount: data.amount,
+           type: data.type,
+           description: data.description
+        });
+      } catch (e) {
+         console.error("Log tx error:", e);
+      }
+    });
+
+    socket.on("logGamePlay", async (data: { userId: string, gameType: string, result: string, winAmount: number, newBalance: number }) => {
+      try {
+        const { supabase } = await import("./supabase.js");
+        if (!supabase) return;
+        
+        await supabase.from("users").update({ balance: data.newBalance }).eq("id", data.userId);
+        await supabase.from("game_logs").insert({
+           user_id: data.userId,
+           game_type: data.gameType,
+           result: data.result,
+           win_amount: data.winAmount
+        });
+      } catch (e) {
+         console.error("Log game error:", e);
+      }
+    });
+
+    socket.on("getUserTransactions", async (userId: string) => {
+      try {
+        const { supabase } = await import("./supabase.js");
+        if (!supabase) return;
+        const { data, error } = await supabase
+          .from("transactions")
+          .select("*")
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false })
+          .limit(50);
+        if (!error && data) {
+          socket.emit("userTransactions", data);
+        }
+      } catch (e) {
+        console.error("Get tx error:", e);
+      }
+    });
+
+    socket.on("getUserGameLogs", async (userId: string) => {
+      try {
+        const { supabase } = await import("./supabase.js");
+        if (!supabase) return;
+        const { data, error } = await supabase
+          .from("game_logs")
+          .select("*")
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false })
+          .limit(50);
+        if (!error && data) {
+          socket.emit("userGameLogs", data);
+        }
+      } catch (e) {
+        console.error("Get game logs error:", e);
+      }
+    });
 
     socket.on("joinRoom", (roomId: string) => {
       if (currentRoomId) {

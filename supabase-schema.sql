@@ -1,5 +1,63 @@
 -- Supabase Schema for the Game
 
+-- Create the users table for balance persistence
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    username TEXT,
+    photo_url TEXT,
+    first_name TEXT,
+    last_name TEXT,
+    balance NUMERIC DEFAULT 100000,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Safely add columns in case the table already exists
+DO $$
+BEGIN
+    BEGIN
+        ALTER TABLE users ADD COLUMN photo_url TEXT;
+    EXCEPTION
+        WHEN duplicate_column THEN null;
+    END;
+    BEGIN
+        ALTER TABLE users ADD COLUMN first_name TEXT;
+    EXCEPTION
+        WHEN duplicate_column THEN null;
+    END;
+    BEGIN
+        ALTER TABLE users ADD COLUMN last_name TEXT;
+    EXCEPTION
+        WHEN duplicate_column THEN null;
+    END;
+END $$;
+
+-- Enable Realtime for the users table
+BEGIN;
+  DROP PUBLICATION IF EXISTS supabase_realtime;
+  CREATE PUBLICATION supabase_realtime;
+COMMIT;
+ALTER PUBLICATION supabase_realtime ADD TABLE users;
+
+-- Create the transactions table
+CREATE TABLE IF NOT EXISTS transactions (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    user_id TEXT REFERENCES users(id),
+    amount NUMERIC NOT NULL,
+    type TEXT NOT NULL,
+    description TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Create the game_logs table for Chance and Jackpot
+CREATE TABLE IF NOT EXISTS game_logs (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    user_id TEXT REFERENCES users(id),
+    game_type TEXT NOT NULL,
+    result TEXT,
+    win_amount NUMERIC DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
 -- Create the rounds table
 CREATE TABLE IF NOT EXISTS rounds (
     id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
@@ -21,6 +79,3 @@ CREATE TABLE IF NOT EXISTS bets (
     side TEXT NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
-
--- Note: You might want to enable RLS (Row Level Security) depending on your needs.
--- Since the backend uses the Service Role key, it bypasses RLS for inserting records.

@@ -86,58 +86,53 @@ export function OdometerCanvas({
 
     const draw = () => {
       const elapsed = (Date.now() - startTime) / 1000; // in seconds
-      const t = Math.min(elapsed, duration) * (7.0 / duration); // scale to original 7s timeline
+      const t = Math.min(elapsed, duration);
 
-      // Helper for dramatic ease out with wind-back
-      const calculatePosition = (tVal: number, stopTime: number, finalY: number, isBlurThresh: number) => {
+      // Helper for dramatic fast-in / super-slow-out
+      const calculatePosition = (tVal: number, startTime: number, stopTime: number, finalY: number) => {
         let y = 0;
-        let isBlur = false;
-        const windBackTime = 0.3;
-        if (tVal <= windBackTime) {
-          y = -1.2 * Math.pow(tVal / windBackTime, 2);
-        } else if (tVal <= stopTime) {
-          const progress = (tVal - windBackTime) / (stopTime - windBackTime);
-          // Dramatic ease out (quintic/exponential hybrid)
-          const easeOut = 1 - Math.pow(1 - progress, 6);
-          const startVal = -1.2;
-          y = startVal + (finalY - startVal) * easeOut;
-          
-          // Add overshoot/bounce at the end
-          if (progress > 0.85) {
-            const bounceP = (progress - 0.85) / 0.15;
-            const bounce = Math.sin(bounceP * Math.PI) * 0.4 * (1 - bounceP);
-            y += bounce;
-          }
-          
-          // Calculate speed based on derivative-ish or progress
-          const remaining = 1 - progress;
-          isBlur = remaining > isBlurThresh && progress > 0.1;
-        } else {
+        if (tVal < startTime) {
+          y = 0; // Not started yet
+        } else if (tVal >= stopTime) {
           y = finalY;
+        } else {
+          const windBackTime = 0.2;
+          const tInReel = tVal - startTime;
+          const reelDuration = stopTime - startTime;
+          
+          if (tInReel <= windBackTime) {
+            y = -1.2 * Math.pow(tInReel / windBackTime, 2);
+          } else {
+            const progress = (tInReel - windBackTime) / (reelDuration - windBackTime);
+            // Fast-in, super-slow-out - Increased acceleration (lower exponent)
+            const easeOut = Math.pow(progress, 0.25) * (1 - Math.pow(1 - progress, 12));
+            const startVal = -1.2;
+            y = startVal + (finalY - startVal) * easeOut;
+            
+            // Add slight overshoot/bounce at the end
+            if (progress > 0.95) {
+              const bounceP = (progress - 0.95) / 0.05;
+              const bounce = Math.sin(bounceP * Math.PI) * 0.2 * (1 - bounceP);
+              y += bounce;
+            }
+          }
         }
-        return { y, isBlur };
+        return y;
       };
 
       // 1. Calculate positions
       
       // HUNDREDS POSITION
       let yHuns = 0;
-      let isHunsBlur = false;
       if (digits === 3) {
-        const huns = calculatePosition(t, 3.5, Y_huns_final, 0.05);
-        yHuns = huns.y;
-        isHunsBlur = huns.isBlur;
+        yHuns = calculatePosition(t, 0, duration / 3, Y_huns_final);
       }
 
       // TENS POSITION
-      const tens = calculatePosition(t, 5.0, Y_tens_final, 0.03);
-      const yTens = tens.y;
-      const isTensBlur = tens.isBlur;
+      const yTens = calculatePosition(t, (digits === 3 ? duration / 3 : 0), (digits === 3 ? duration * 2 / 3 : duration / 2), Y_tens_final);
 
       // ONES POSITION
-      const ones = calculatePosition(t, 7.0, Y_ones_final, 0.01);
-      const yOnes = ones.y;
-      const isOnesBlur = ones.isBlur;
+      const yOnes = calculatePosition(t, (digits === 3 ? duration * 2 / 3 : duration / 2), duration, Y_ones_final);
 
       // Play sound tick on integer crosses
       if (digits === 3) {
@@ -167,7 +162,7 @@ export function OdometerCanvas({
       ctx.fillRect(0, 0, width, height);
 
       // Draw rollers
-      const drawRoller = (xCenter: number, yPos: number, isBlur: boolean) => {
+      const drawRoller = (xCenter: number, yPos: number) => {
         const trackWidth = 72;
         const trackHeight = 110;
         const trackX = xCenter - trackWidth / 2;
@@ -211,27 +206,14 @@ export function OdometerCanvas({
           ctx.translate(xCenter, pixelY);
           ctx.scale(1.0, scaleY);
 
-          // Apply blur substitution
-          if (isBlur) {
-            ctx.shadowColor = isDarkMode ? 'rgba(234, 179, 8, 0.45)' : 'rgba(37, 99, 235, 0.45)';
-            ctx.shadowBlur = 12;
-            ctx.fillStyle = isDarkMode ? 'rgba(234, 179, 8, 0.8)' : 'rgba(37, 99, 235, 0.8)';
-          } else {
-            ctx.fillStyle = isDarkMode ? '#f59e0b' : '#1d4ed8'; // Gold vs Blue
-          }
+          ctx.fillStyle = isDarkMode ? '#f59e0b' : '#1d4ed8'; // Gold vs Blue
 
           ctx.font = '900 40px "JetBrains Mono", monospace';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
           ctx.globalAlpha = opacity;
 
-          // Extra blurred ghosting lines for true Motion Blur
-          if (isBlur) {
-            ctx.fillText(digitToDraw.toString(), 0, -4);
-            ctx.fillText(digitToDraw.toString(), 0, 4);
-          } else {
-            ctx.fillText(digitToDraw.toString(), 0, 0);
-          }
+          ctx.fillText(digitToDraw.toString(), 0, 0);
 
           ctx.restore();
         }
@@ -251,12 +233,12 @@ export function OdometerCanvas({
 
       // Draw tracks
       if (digits === 3) {
-        drawRoller(width / 2 - 84, yHuns, isHunsBlur);
-        drawRoller(width / 2, yTens, isTensBlur);
-        drawRoller(width / 2 + 84, yOnes, isOnesBlur);
+        drawRoller(width / 2 - 84, yHuns);
+        drawRoller(width / 2, yTens);
+        drawRoller(width / 2 + 84, yOnes);
       } else {
-        drawRoller(width / 2 - 42, yTens, isTensBlur);
-        drawRoller(width / 2 + 42, yOnes, isOnesBlur);
+        drawRoller(width / 2 - 42, yTens);
+        drawRoller(width / 2 + 42, yOnes);
       }
 
       // Outer bezel glass highlight diagonal gleam
@@ -276,15 +258,15 @@ export function OdometerCanvas({
       ctx.strokeRect(10, 10, width - 20, height - 20);
       ctx.restore();
 
-      // Trigger completion callback once at 7.0s
-      if (t >= 7.0 && !completedTriggered) {
+      // Trigger completion callback once at duration
+      if (t >= duration && !completedTriggered) {
         completedTriggered = true;
         setTimeout(() => {
           onCompleteRef.current();
         }, 500);
       }
 
-      if (t < 7.0) {
+      if (t < duration) {
         animationId = requestAnimationFrame(draw);
       }
     };

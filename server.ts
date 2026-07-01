@@ -1,26 +1,17 @@
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
-import { createServer } from "http";
-import { Server } from "socket.io";
-import { initGameEngine } from "./src/server/GameEngine.js";
+import cors from "cors";
+import { supabase } from "./server/supabase.js";
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
-  
-  const httpServer = createServer(app);
-  const io = new Server(httpServer, {
-    cors: {
-      origin: "*",
-      methods: ["GET", "POST"],
-    }
-  });
 
-  // Initialize Game Engine with Socket.IO
-  initGameEngine(io);
+  app.use(cors());
+  app.use(express.json());
 
-  // API routes
+  // API Routes
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });
   });
@@ -40,7 +31,7 @@ async function startServer() {
     });
   }
 
-  httpServer.listen(PORT, "0.0.0.0", () => {
+  app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }

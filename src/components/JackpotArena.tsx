@@ -254,14 +254,18 @@ export function JackpotArena({
     const matchedWinner = availableSpots[Math.floor(Math.random() * availableSpots.length)];
     setCurrentWinner(matchedWinner);
 
-    // Both tiers run lightning blitz trace for visual excitement
-    runNeonLightningBlitz(matchedWinner, drawIndex);
+    // Neon Lightning Blitz for mini, for grand we just start odometer immediately
+    if (tier !== 'grand') {
+      runNeonLightningBlitz(matchedWinner, drawIndex);
+    } else {
+      // Grand skips neon blitz
+    }
   };
 
   // Neon Lightning Blitz loop
   const runNeonLightningBlitz = (finalWinner: number, drawIndex: 1 | 2 | 3) => {
-    let currentDelay = 35; // starts extremely fast
-    const totalDuration = tier === 'grand' ? 30000 : 7000; // 30s for grand, 7s for mini
+    let currentDelay = 40; // Starts a bit slower
+    const totalDuration = 20000; // 20s for all tiers
     const startTime = Date.now();
 
     // Create a list of available candidate coordinates for visual jumps
@@ -272,12 +276,16 @@ export function JackpotArena({
       if (!isMounted.current) return;
       const elapsed = Date.now() - startTime;
       
-      if (elapsed > totalDuration - 1200) {
-        // Nearing the end, decelerate aggressively and lock into finalWinner
-        currentDelay = Math.min(currentDelay * 1.35, 600);
+      // Suspenseful logic: initial build, mid-speed up, dramatic end slow down
+      if (elapsed > totalDuration - 2500) {
+        // Dramatic slow down at the end (last 2.5s)
+        currentDelay = Math.min(currentDelay * 1.5, 1000);
+      } else if (elapsed > totalDuration * 0.7) {
+        // Slight acceleration in the middle for tension
+        currentDelay = Math.max(currentDelay - 5, 20);
       } else {
-        // Smoothly scale up delay to create decelerating trace
-        currentDelay = Math.min(currentDelay + 3, 200);
+        // Initial build-up
+        currentDelay = Math.min(currentDelay + 2, 150);
       }
 
       // Select random candidate
@@ -411,7 +419,18 @@ export function JackpotArena({
     }
 
     if (activeGrid[num]) {
-      showNotification('This position is already allocated!', 'error');
+      if (activeGrid[num].isSelf) {
+        // Unclaim
+        setBalance(prev => prev + currentConfig.entry);
+        setTargetGrid(prev => {
+          const next = { ...prev };
+          delete next[num];
+          return next;
+        });
+        showNotification(`Unsecured Grid Position #${num}!`, 'success');
+      } else {
+        showNotification('This position is already allocated!', 'error');
+      }
       return;
     }
 
@@ -442,40 +461,9 @@ export function JackpotArena({
   return (
     <div className="flex-1 flex flex-col justify-start">
       
-      {/* Live Vault Header Area */}
-      {!isTheaterActive && (
-        <div className="bg-gradient-to-r from-gray-900 via-slate-900 to-indigo-950 p-4 rounded-2xl border border-indigo-500/20 shadow-lg text-white mb-4 flex flex-col gap-2 relative overflow-hidden shrink-0">
-          <div className="absolute right-0 top-0 translate-x-1/3 -translate-y-1/3 bg-indigo-500/10 w-24 h-24 rounded-full blur-xl" />
-          
-          <div className="flex justify-between items-center z-10">
-            <div>
-              <span className="text-[10px] font-black uppercase text-indigo-400 tracking-widest block">Gross Jackpot Vault</span>
-              <div className="flex items-center gap-1.5 mt-0.5 animate-pulse">
-                <Trophy className="w-5 h-5 text-yellow-400" />
-                <span className="text-xl font-black font-mono tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 via-amber-200 to-amber-400">
-                  {currentConfig.gross.toLocaleString()} ETB
-                </span>
-              </div>
-            </div>
-          </div>
 
-          {/* Prize Split Tickers */}
-          <div className="grid grid-cols-3 gap-2 border-t border-indigo-900/50 pt-2 text-center text-[10px] font-semibold text-gray-400 mt-1">
-            <div>
-              <span className="block text-[8px] uppercase tracking-wider text-indigo-300">1st (80%)</span>
-              <span className="font-mono text-white font-bold">{currentConfig.p1.toLocaleString()}</span>
-            </div>
-            <div>
-              <span className="block text-[8px] uppercase tracking-wider text-indigo-300">2nd (14%)</span>
-              <span className="font-mono text-white font-bold">{currentConfig.p2.toLocaleString()}</span>
-            </div>
-            <div>
-              <span className="block text-[8px] uppercase tracking-wider text-indigo-300">3rd (6%)</span>
-              <span className="font-mono text-white font-bold">{currentConfig.p3.toLocaleString()}</span>
-            </div>
-          </div>
-        </div>
-      )}
+      
+
 
       {/* Room Category Tabs */}
       {!isTheaterActive && (
@@ -521,12 +509,23 @@ export function JackpotArena({
                 isDarkMode={isDarkMode}
                 soundTicks={soundTicks}
                 digits={tier === 'grand' ? 3 : 2}
-                duration={tier === 'grand' ? 30.0 : 7.0}
+                duration={tier === 'grand' ? 60.0 : 7.0}
               />
               <div className="mt-3 text-xs font-black uppercase text-amber-500 tracking-widest animate-pulse flex items-center gap-1.5">
                 <Zap className="w-3.5 h-3.5 text-amber-500 animate-bounce" />
                 <span>ROLLING FOR {drawNumber === 1 ? '1ST' : drawNumber === 2 ? '2ND' : '3RD'} PLACE SELECTION</span>
               </div>
+              
+              {tier === 'grand' && gamePhase === 'drawing' && (
+                <div className="flex flex-col items-center justify-center gap-2 bg-zinc-950/90 p-4 rounded-2xl border border-zinc-800 w-full mt-0">
+                  <h2 className="text-sm font-black text-amber-500 uppercase tracking-widest">Winners List</h2>
+                  <div className="flex flex-col gap-1">
+                    {winners.first && <div className="text-xs text-emerald-400 font-bold">1st Place: #{winners.first}</div>}
+                    {winners.second && <div className="text-xs text-emerald-400 font-bold">2nd Place: #{winners.second}</div>}
+                    {winners.third && <div className="text-xs text-emerald-400 font-bold">3rd Place: #{winners.third}</div>}
+                  </div>
+                </div>
+              )}
             </motion.div>
           ) : (
             <motion.div
@@ -562,8 +561,83 @@ export function JackpotArena({
         </div>
       )}
 
+      {/* 3D Trophy Podium Section (No label, placed under the selectors) */}
+      {!isTheaterActive && (
+        <div className="bg-slate-950/50 p-2.5 rounded-2xl border border-zinc-800/60 mb-3 shadow-inner">
+          <div className="flex items-end justify-center gap-2 pt-2 pb-1">
+            
+            {/* 2nd Place (Silver Trophy) */}
+            <div className="flex flex-col items-center flex-1 max-w-[90px] text-center">
+              <div className="relative">
+                {/* Silver Crown */}
+                <Crown className="w-4 h-4 text-zinc-400 fill-zinc-400/20 absolute -top-3.5 -right-0.5 rotate-12 drop-shadow-[0_0_3px_rgba(161,161,170,0.5)]" />
+                {/* Silver Border Circle */}
+                <div className="w-12 h-12 rounded-full border-2 border-zinc-400 bg-zinc-950/80 flex items-center justify-center shadow-[0_3px_8px_rgba(161,161,170,0.15)]">
+                  <Trophy className="w-6 h-6 text-zinc-300 drop-shadow-[0_1px_4px_rgba(161,161,170,0.3)]" />
+                </div>
+                {/* Place Badge */}
+                <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 px-1.5 py-0.5 bg-zinc-500 text-[7px] font-black rounded-md text-white shadow-sm border border-zinc-400/30">
+                  #2
+                </span>
+              </div>
+              <div className="mt-2.5 w-full py-1 px-1 bg-zinc-800/80 border border-zinc-700/60 rounded-xl text-center shadow-md">
+                <span className="font-mono text-[9px] font-black text-zinc-300">
+                  {currentConfig.p2.toLocaleString()}
+                </span>
+                <span className="text-[7px] text-zinc-400 font-black ml-0.5">ETB</span>
+              </div>
+            </div>
+
+            {/* 1st Place (Gold Trophy - Elevated) */}
+            <div className="flex flex-col items-center flex-1 max-w-[100px] text-center -translate-y-1">
+              <div className="relative scale-110">
+                {/* Gold Crown */}
+                <Crown className="w-5 h-5 text-amber-400 fill-amber-400/30 absolute -top-4.5 left-1/2 -translate-x-1/2 -rotate-12 drop-shadow-[0_0_6px_rgba(245,158,11,0.6)]" />
+                {/* Gold Border Circle */}
+                <div className="w-14 h-14 rounded-full border-2 border-amber-400 bg-zinc-950/90 flex items-center justify-center shadow-[0_4px_12px_rgba(245,158,11,0.25)]">
+                  <Trophy className="w-7 h-7 text-amber-400 drop-shadow-[0_1px_5px_rgba(245,158,11,0.5)]" />
+                </div>
+                {/* Place Badge */}
+                <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 px-2 py-0.5 bg-amber-500 text-[7px] font-black rounded-md text-zinc-950 shadow-md border border-amber-300">
+                  #1
+                </span>
+              </div>
+              <div className="mt-3.5 w-full py-1.5 px-1.5 bg-gradient-to-r from-amber-500 to-yellow-400 border border-amber-300 rounded-xl text-center shadow-[0_3px_8px_rgba(245,158,11,0.3)]">
+                <span className="font-mono text-[10px] font-black text-zinc-950">
+                  {currentConfig.p1.toLocaleString()}
+                </span>
+                <span className="text-[7px] text-zinc-900 font-black ml-0.5">ETB</span>
+              </div>
+            </div>
+
+            {/* 3rd Place (Copper/Bronze Trophy) */}
+            <div className="flex flex-col items-center flex-1 max-w-[90px] text-center">
+              <div className="relative">
+                {/* Bronze/Copper Crown */}
+                <Crown className="w-4 h-4 text-orange-500 fill-orange-500/10 absolute -top-3.5 -left-0.5 -rotate-12 drop-shadow-[0_0_3px_rgba(249,115,22,0.5)]" />
+                {/* Bronze Border Circle */}
+                <div className="w-12 h-12 rounded-full border-2 border-orange-500/70 bg-zinc-950/80 flex items-center justify-center shadow-[0_3px_8px_rgba(249,115,22,0.15)]">
+                  <Trophy className="w-6 h-6 text-orange-600/95 drop-shadow-[0_1px_4px_rgba(249,115,22,0.3)]" />
+                </div>
+                {/* Place Badge */}
+                <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 px-1.5 py-0.5 bg-orange-600 text-[7px] font-black rounded-md text-white shadow-sm border border-orange-500/30">
+                  #3
+                </span>
+              </div>
+              <div className="mt-2.5 w-full py-1 px-1 bg-orange-950/50 border border-orange-900/60 rounded-xl text-center shadow-md">
+                <span className="font-mono text-[9px] font-black text-orange-400">
+                  {currentConfig.p3.toLocaleString()}
+                </span>
+                <span className="text-[7px] text-orange-500 font-black ml-0.5">ETB</span>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
+
       {/* Grid coordinates list with scroll support */}
-      <div className="flex-1 overflow-y-auto px-1 pr-2 pb-6 max-h-[420px]">
+      <div className={`flex-1 overflow-y-auto px-1 pr-2 pb-6 max-h-[420px] ${tier === 'grand' && gamePhase === 'drawing' ? 'opacity-0' : 'opacity-100'}`}>
         
         {/* Progress indicator bar (hidden during active drawing) */}
         {!isTheaterActive && (
@@ -576,7 +650,7 @@ export function JackpotArena({
 
         {/* Dynamic coordinate tiles (Compact 8x13 and 7x8 structures) */}
         <div 
-          className={`grid gap-1 transition-opacity duration-500 ${isTheaterActive ? 'opacity-15' : 'opacity-100'}`}
+          className="grid gap-1"
           style={{
             gridTemplateColumns: 'repeat(8, minmax(0, 1fr))'
           }}
@@ -650,7 +724,7 @@ export function JackpotArena({
 
       {/* Global Locked Phase 1 Translucent Modal overlay */}
       {gamePhase === 'freeze' && (
-        <div className="absolute inset-0 bg-black/65 backdrop-blur-xs z-50 rounded-2xl flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-300">
+        <div className="absolute inset-0 bg-black/20 z-50 rounded-2xl flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-300">
           <motion.div
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
@@ -672,7 +746,7 @@ export function JackpotArena({
       {/* Winners Overlay Popup */}
       <AnimatePresence>
         {gamePhase === 'winner' && (
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-xs z-50 rounded-2xl flex flex-col items-center justify-center p-6 text-center">
+          <div className="absolute inset-0 bg-black/20 z-50 rounded-2xl flex flex-col items-center justify-center p-6 text-center">
             {(() => {
               // Extract matching winner number based on active drawIndex
               const winnerNum = drawNumber === 1 ? winners.first : drawNumber === 2 ? winners.second : winners.third;

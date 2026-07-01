@@ -201,7 +201,28 @@ export function WheelOfChance({
 
   const handleClaimSlot = (num: number) => {
     if (phase !== 'lobby') return;
-    if (claimedSlots[num]) return;
+    
+    if (claimedSlots[num]) {
+      if (claimedSlots[num].isSelf) {
+        // Unclaim
+        setBalance(prev => prev + entryFee);
+        setMockTransactions(prev => [
+          { id: Date.now(), type: 'bet', desc: `Released Slot #${num} (${activeRoom} Room)`, amount: entryFee, date: 'Just now', positive: true },
+          ...prev
+        ]);
+        setClaimedSlots(prev => {
+          const next = { ...prev };
+          delete next[num];
+          setStatusFilament(`• Slot #${num} released.`);
+          return next;
+        });
+        playBeep(440, 0.1, 'sine');
+      } else {
+        setStatusFilament('• ❌ Slot already secured by another player!');
+        playBeep(220, 0.25, 'sawtooth');
+      }
+      return;
+    }
 
     if (balance < entryFee) {
       setStatusFilament('• ❌ Insufficient balance for this room!');
@@ -256,7 +277,7 @@ export function WheelOfChance({
 
     const startRotation = rotationRef.current;
     const distance = targetRotation - startRotation;
-    const duration = 6000; // 6 seconds spin duration
+    const duration = 30000; // 30 seconds spin duration
     const startTime = performance.now();
 
     let lastTickAngle = 0;
@@ -266,7 +287,7 @@ export function WheelOfChance({
       const elapsed = now - startTime;
       const progress = Math.min(elapsed / duration, 1);
 
-      // Quintic ease-out curve (fast in, super slow out)
+      // Standard ease-out for "Start fast, end slow"
       const ease = 1 - Math.pow(1 - progress, 5);
       rotationRef.current = startRotation + distance * ease;
 
@@ -282,9 +303,14 @@ export function WheelOfChance({
         animationFrameRef.current = requestAnimationFrame(animateWheel);
       } else {
         isSpinningRef.current = false;
+        
         setJustDrawnWinner(winningSectorVal);
         setWinners(prev => ({ ...prev, [thisDraw]: winningSectorVal }));
-        setPhase('announcing');
+        
+        // Wait 1.5s to allow the final frame to render and look fully stopped before announcement
+        setTimeout(() => {
+          setPhase('announcing');
+        }, 1500);
 
         // Payout Calculations based on room & draw tier
         const grossPool = maxSlots * entryFee;

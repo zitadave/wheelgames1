@@ -29,6 +29,11 @@ BEGIN
     EXCEPTION
         WHEN duplicate_column THEN null;
     END;
+    BEGIN
+        ALTER TABLE users ADD COLUMN phone TEXT;
+    EXCEPTION
+        WHEN duplicate_column THEN null;
+    END;
 END $$;
 
 -- Enable Realtime for the users table

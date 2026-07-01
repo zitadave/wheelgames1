@@ -287,8 +287,8 @@ export function WheelOfChance({
       const elapsed = now - startTime;
       const progress = Math.min(elapsed / duration, 1);
 
-      // Standard ease-out for "Start fast, end slow"
-      const ease = 1 - Math.pow(1 - progress, 5);
+      // Super slow suspenseful ease-out
+      const ease = Math.pow(progress, 0.25) * (1 - Math.pow(1 - progress, 250));
       rotationRef.current = startRotation + distance * ease;
 
       // Click sound tick

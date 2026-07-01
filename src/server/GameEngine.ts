@@ -1,4 +1,5 @@
 import { Server, Socket } from "socket.io";
+import { supabase } from "./supabase.js";
 
 export type Side = "even" | "odd";
 
@@ -177,11 +178,51 @@ class Room {
     this.timer = setInterval(() => this.tick(), 1000);
   }
 
-  private showResult() {
+  private async showResult() {
     this.state.status = "result";
     this.state.timeLeft = RESULT_TIME;
     this.broadcastState();
     this.timer = setInterval(() => this.tick(), 1000);
+
+    // Async save to Supabase
+    try {
+      if (supabase) {
+        // Save round
+        const { data: roundData, error: roundError } = await supabase
+          .from("rounds")
+          .insert({
+            round_number: this.state.roundId,
+            winner: this.state.winner,
+            pools_even: this.state.pools.even,
+            pools_odd: this.state.pools.odd,
+            room_id: this.state.id
+          })
+          .select()
+          .single();
+          
+        if (roundError) {
+          console.error("Error saving round to Supabase:", roundError);
+        } else if (roundData) {
+          // Save bets
+          const betsToInsert = Object.values(this.state.players).map(p => ({
+            round_id: roundData.id,
+            user_id: p.userId,
+            username: p.username,
+            amount: p.amount,
+            side: p.side
+          })).filter(b => b.amount > 0);
+          
+          if (betsToInsert.length > 0) {
+            const { error: betsError } = await supabase
+              .from("bets")
+              .insert(betsToInsert);
+            if (betsError) console.error("Error saving bets to Supabase:", betsError);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Failed to connect to Supabase for logging:", err);
+    }
   }
 
   private broadcastState() {

@@ -1,6 +1,9 @@
-import TelegramBot from "node-telegram-bot-api";
+import * as TelegramBot from "node-telegram-bot-api";
 import { supabase } from "./supabase.js";
 import { Server } from "socket.io";
+import * as fs from "fs";
+import * as path from "path";
+import nodemailer from "nodemailer";
 
 let botInfo: any = null;
 
@@ -28,6 +31,78 @@ interface UserState {
 
 const userStates = new Map<string, UserState>();
 
+interface SetAdminState {
+  action: 'idle' | 'awaiting_add_userid' | 'awaiting_add_password' | 'awaiting_del_password' | 'change_pw_old_auth' | 'change_pw_new_input' | 'change_pw_confirm';
+  targetUserId?: number;
+  deleteTargetId?: number;
+  proposedNewPassword?: string;
+}
+const setAdminStates = new Map<number, SetAdminState>();
+
+const PASSWORD_FILE_PATH = path.join(process.cwd(), "admin_password.json");
+
+function getStoredPassword(): string {
+  try {
+    if (fs.existsSync(PASSWORD_FILE_PATH)) {
+      const data = JSON.parse(fs.readFileSync(PASSWORD_FILE_PATH, "utf8"));
+      if (data && typeof data.password === "string" && data.password.trim() !== "") {
+        return data.password;
+      }
+    }
+  } catch (err: any) {
+    logBot(`Error reading password file: ${err.message}`);
+  }
+  // Default fallback
+  return process.env.ADMIN_PASSWORD || "AdminSecurePass777";
+}
+
+function setStoredPassword(newPassword: string) {
+  try {
+    fs.writeFileSync(PASSWORD_FILE_PATH, JSON.stringify({ password: newPassword }, null, 2), "utf8");
+    logBot("Owner password updated in JSON storage.");
+  } catch (err: any) {
+    logBot(`Error writing password file: ${err.message}`);
+  }
+}
+
+async function sendPasswordEmail(password: string): Promise<boolean> {
+  try {
+    const host = process.env.SMTP_HOST || "smtp.gmail.com";
+    const port = parseInt(process.env.SMTP_PORT || "587", 10);
+    const user = process.env.SMTP_USER;
+    const pass = process.env.SMTP_PASS;
+
+    if (!user || !pass) {
+      logBot(`SMTP credentials missing (SMTP_USER/SMTP_PASS). Cannot send real email to tamirud8@gmail.com. Password is: ${password}`);
+      return false;
+    }
+
+    const transporter = nodemailer.createTransport({
+      host,
+      port,
+      secure: port === 465,
+      auth: {
+        user,
+        pass,
+      },
+    });
+
+    await transporter.sendMail({
+      from: `"Telegram Bot Admin" <${user}>`,
+      to: "tamirud8@gmail.com",
+      subject: "Telegram Bot Admin Password Recovery",
+      text: `Hello,\n\nYour Telegram Bot Owner Admin Password is: ${password}\n\nSecurity notice: If you did not request this, please change your password immediately.`,
+      html: `<p>Hello,</p><p>Your Telegram Bot Owner Admin Password is: <strong>${password}</strong></p><p><em>Security notice: If you did not request this, please change your password immediately.</em></p>`,
+    });
+
+    logBot(`Admin password sent successfully to tamirud8@gmail.com via SMTP.`);
+    return true;
+  } catch (error: any) {
+    logBot(`Error sending password email to tamirud8@gmail.com: ${error.message}`);
+    return false;
+  }
+}
+
 // In-memory pending requests store
 interface PendingRequest {
   id: string;
@@ -44,15 +119,43 @@ interface PendingRequest {
 
 const pendingRequests = new Map<string, PendingRequest>();
 
-// Admin Chat IDs
-const adminChatIds = new Set<number>();
+// Dynamic Owner configurations to prevent Access Denied for testers
+const OWNER_IDS = new Set<number>([336997351, 5115194570]);
+const envOwnerId = process.env.TELEGRAM_OWNER_ID;
+if (envOwnerId) {
+  const parsed = parseInt(envOwnerId, 10);
+  if (!isNaN(parsed)) {
+    OWNER_IDS.add(parsed);
+  }
+}
+
+function isOwner(userId: number | undefined): boolean {
+  if (!userId) return false;
+  return OWNER_IDS.has(userId);
+}
+
+function getPrimaryOwnerId(): number {
+  if (envOwnerId) {
+    const parsed = parseInt(envOwnerId, 10);
+    if (!isNaN(parsed)) return parsed;
+  }
+  return 5115194570; // Fallback to current tester/owner ID
+}
+
+// Admin Chat IDs (Initialized with all owners/starting admins)
+const adminChatIds = new Set<number>(OWNER_IDS);
 
 // Initialize Admin IDs from environment variables if present
 const adminEnv = process.env.TELEGRAM_ADMIN_IDS;
 if (adminEnv) {
   adminEnv.split(',').forEach(id => {
     const trimmed = id.trim();
-    if (trimmed) adminChatIds.add(parseInt(trimmed, 10));
+    if (trimmed) {
+      const parsed = parseInt(trimmed, 10);
+      if (!isNaN(parsed) && parsed > 0) {
+        adminChatIds.add(parsed);
+      }
+    }
   });
 }
 
@@ -74,7 +177,10 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
   }
 
   const appUrl = process.env.APP_URL || "https://ais-pre-ak5sjlemx7qmzbzccvr2vl-11202815657.europe-west2.run.app";
-  const bot = new TelegramBot(token, { polling: true });
+  const TelegramBotClass = typeof TelegramBot === "function"
+    ? TelegramBot
+    : ((TelegramBot as any).default || TelegramBot);
+  const bot = new TelegramBotClass(token, { polling: true });
 
   try {
     botInfo = await bot.getMe();
@@ -87,7 +193,8 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       { command: "deposit", description: "Deposit ETB into your balance" },
       { command: "withdraw", description: "Withdraw ETB from your balance" },
       { command: "support", description: "Show contact support details" },
-      { command: "setadmin", description: "Set current chat as Admin for approvals" }
+      { command: "setadmin", description: "Manage administrator privileges (Owner Only)" },
+      { command: "cancel", description: "Cancel current operation or active flows" }
     ]);
 
     // Update main bot menu button to open the Web App
@@ -127,6 +234,41 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
     return false;
   };
 
+  const getOrCreateUser = async (userId: string, username: string, firstName?: string, lastName?: string): Promise<{ balance: number } | null> => {
+    try {
+      const { data, error } = await supabase.from('users').select('balance').eq('id', userId);
+      if (error) {
+        logBot(`supabase error fetching user ID=${userId}: ${error.message}`);
+        return null;
+      }
+      if (data && data.length > 0) {
+        return { balance: Number(data[0].balance) };
+      }
+
+      logBot(`User ID=${userId} not found. Creating user in database...`);
+      const { data: insertedData, error: insertError } = await supabase
+        .from('users')
+        .insert({
+          id: userId,
+          username: username || null,
+          first_name: firstName || null,
+          last_name: lastName || null,
+          balance: 100000
+        })
+        .select('balance')
+        .single();
+
+      if (insertError) {
+        logBot(`Error inserting user ID=${userId}: ${insertError.message}`);
+        return { balance: 100000 };
+      }
+      return { balance: insertedData ? Number(insertedData.balance) : 100000 };
+    } catch (e: any) {
+      logBot(`Unexpected error in getOrCreateUser for ID=${userId}: ${e?.message || e}`);
+      return { balance: 100000 };
+    }
+  };
+
   const startDepositFlow = (chatId: number, userId: string) => {
     logBot(`startDepositFlow triggered for userId=${userId}, chatId=${chatId}`);
     try {
@@ -141,14 +283,8 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
   const startWithdrawalFlow = async (chatId: number, userId: string) => {
     logBot(`startWithdrawalFlow triggered for userId=${userId}, chatId=${chatId}`);
     try {
-      // Fetch user's current balance
-      const { data: user, error } = await supabase.from('users').select('balance').eq('id', userId).single();
-      if (error) {
-        logBot(`supabase error fetching balance for userId=${userId}: ${error.message}`);
-        if (handleSupabaseError(chatId, error)) {
-          return;
-        }
-      }
+      // Fetch user's current balance safely using getOrCreateUser helper
+      const user = await getOrCreateUser(userId, "");
       const currentBalance = user ? Number(user.balance) : 0;
       logBot(`userId=${userId} current balance is ${currentBalance}`);
 
@@ -199,11 +335,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
     // Default main menu greeting
     let userBalanceStr = "100,000 ETB (Demo)";
     try {
-      const { data: user, error } = await supabase.from('users').select('balance').eq('id', userId).single();
-      if (error) {
-        logBot(`supabase error fetching balance for userId=${userId} on /start: ${error.message}`);
-        handleSupabaseError(chatId, error);
-      }
+      const user = await getOrCreateUser(userId, msg.from?.username || "", msg.from?.first_name, msg.from?.last_name);
       if (user) {
         userBalanceStr = `${Number(user.balance).toLocaleString()} ETB`;
       }
@@ -274,11 +406,45 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
     if (msg.from?.id) startWithdrawalFlow(msg.chat.id, msg.from.id.toString());
   });
 
-  // Set current chat as Admin (Self-registration)
+  // Cancel flow command
+  bot.onText(/\/cancel/, (msg) => {
+    const userId = msg.from?.id;
+    if (userId) {
+      if (isOwner(userId)) {
+        setAdminStates.delete(userId);
+      }
+      userStates.set(userId.toString(), { step: 'idle' });
+      bot.sendMessage(msg.chat.id, "✅ <b>All active flows and setups have been canceled.</b>", { parse_mode: "HTML" });
+    }
+  });
+
+  // Owner Admin Management control panel
   bot.onText(/\/setadmin/, (msg) => {
     const chatId = msg.chat.id;
-    adminChatIds.add(chatId);
-    bot.sendMessage(chatId, `👑 *Admin Registered Successfully!*\n\nYou will now receive all Deposit and Withdrawal requests for interactive approval/declination in this chat.`, { parse_mode: "Markdown" });
+    const userId = msg.from?.id;
+
+    if (!isOwner(userId)) {
+      bot.sendMessage(chatId, `❌ <b>Access Denied.</b>\n\nThis command is restricted to the Starting Admin/Owner of this bot.`, { parse_mode: "HTML" });
+      logBot(`Failed admin control panel access attempt by userId=${userId}`);
+      return;
+    }
+
+    // Show interactive admin panel
+    bot.sendMessage(chatId, `👑 <b>Admin Control Panel</b>\n\nSelect an operation to manage administrator privileges:`, {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "➕ Add Admin", callback_data: "setadmin_add_start" },
+            { text: "➖ Delete Admin", callback_data: "setadmin_del_start" }
+          ],
+          [
+            { text: "🔒 Change Password", callback_data: "setadmin_change_pw_start" },
+            { text: "❌ Cancel", callback_data: "setadmin_cancel" }
+          ]
+        ]
+      }
+    });
   });
 
   // --- MESSAGE STEP-BY-STEP HANDLERS ---
@@ -289,6 +455,137 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
 
     const text = msg.text?.trim() || "";
     if (text.startsWith("/")) return; // Ignore commands
+
+    // Process setadmin interactive states for the Owner
+    const numUserId = msg.from?.id;
+    if (isOwner(numUserId)) {
+      const adminState = setAdminStates.get(numUserId);
+      if (adminState && adminState.action !== 'idle') {
+        // 1. Awaiting User ID to add
+        if (adminState.action === 'awaiting_add_userid') {
+          const parsedId = parseInt(text, 10);
+          if (isNaN(parsedId) || parsedId <= 0) {
+            return bot.sendMessage(chatId, "❌ <b>Invalid User ID.</b>\n\nPlease send a valid numeric Telegram User ID directly, or type <code>/cancel</code> to abort.", { parse_mode: "HTML" });
+          }
+
+          setAdminStates.set(numUserId, {
+            action: 'awaiting_add_password',
+            targetUserId: parsedId
+          });
+
+          return bot.sendMessage(chatId, `🔑 <b>User ID ${parsedId} entered.</b>\n\nPlease enter your Owner Password to authorize adding this user as an Admin:`, { parse_mode: "HTML" });
+        }
+
+        // 2. Awaiting Owner Password for adding admin
+        if (adminState.action === 'awaiting_add_password') {
+          const ownerPassword = getStoredPassword();
+          if (text === ownerPassword) {
+            const targetId = adminState.targetUserId;
+            if (targetId) {
+              adminChatIds.add(targetId);
+              bot.sendMessage(chatId, `👑 <b>Success!</b>\n\nUser ID <code>${targetId}</code> has been successfully added to the Admin list.`, { parse_mode: "HTML" });
+
+              // Notify target user
+              bot.sendMessage(targetId, `👑 <b>You have been registered as an Admin by the Owner!</b>\n\nYou will now receive all transaction requests for approval/declination in this private chat room.`, { parse_mode: "HTML" })
+                .catch(() => logBot(`Could not send welcome message to new admin ${targetId} (must start bot in private first).`));
+            } else {
+              bot.sendMessage(chatId, `❌ Something went wrong: target ID not found.`);
+            }
+          } else {
+            bot.sendMessage(chatId, `❌ <b>Incorrect password.</b> Admin registration aborted.`, { parse_mode: "HTML" });
+          }
+          setAdminStates.delete(numUserId);
+          return;
+        }
+
+        // 3. Awaiting Owner Password for deleting admin
+        if (adminState.action === 'awaiting_del_password') {
+          const ownerPassword = getStoredPassword();
+          if (text === ownerPassword) {
+            const deleteTargetId = adminState.deleteTargetId;
+            if (deleteTargetId) {
+              adminChatIds.delete(deleteTargetId);
+              bot.sendMessage(chatId, `❌ <b>Success!</b>\n\nAdmin ID <code>${deleteTargetId}</code> has been successfully removed from the Admin list.`, { parse_mode: "HTML" });
+
+              // Notify the deleted admin
+              bot.sendMessage(deleteTargetId, `⚠️ <b>Your Admin privileges have been revoked by the Owner.</b>`, { parse_mode: "HTML" })
+                .catch(() => {});
+            } else {
+              bot.sendMessage(chatId, `❌ Something went wrong: delete target ID not found.`);
+            }
+          } else {
+            bot.sendMessage(chatId, `❌ <b>Incorrect password.</b> Admin deletion aborted.`, { parse_mode: "HTML" });
+          }
+          setAdminStates.delete(numUserId);
+          return;
+        }
+
+        // 4. Awaiting current/old password to authorize password change
+        if (adminState.action === 'change_pw_old_auth') {
+          const currentPassword = getStoredPassword();
+          if (text === currentPassword) {
+            setAdminStates.set(numUserId, {
+              action: 'change_pw_new_input'
+            });
+            return bot.sendMessage(chatId, `✅ <b>Old password verified.</b>\n\n🔒 Please enter your <b>new password</b>:`, { parse_mode: "HTML" });
+          } else {
+            bot.sendMessage(chatId, `❌ <b>Incorrect password.</b> Password change aborted.`, { parse_mode: "HTML" });
+            setAdminStates.delete(numUserId);
+            return;
+          }
+        }
+
+        // 5. Awaiting new password input
+        if (adminState.action === 'change_pw_new_input') {
+          const newPw = text;
+          if (newPw.length < 4) {
+            return bot.sendMessage(chatId, `⚠️ <b>Password is too short.</b> Please enter a new password that is at least 4 characters long:`, { parse_mode: "HTML" });
+          }
+
+          setAdminStates.set(numUserId, {
+            action: 'change_pw_confirm',
+            proposedNewPassword: newPw
+          });
+
+          return bot.sendMessage(chatId, `🔒 <b>New password received.</b>\n\nPlease write your <b>new password again</b> to confirm:`, { parse_mode: "HTML" });
+        }
+
+        // 6. Awaiting confirmed password input
+        if (adminState.action === 'change_pw_confirm') {
+          const proposed = adminState.proposedNewPassword;
+          if (text === proposed) {
+            setStoredPassword(text);
+            bot.sendMessage(chatId, `🎉 <b>Congratulations! Your password has been successfully changed.</b>`, { parse_mode: "HTML" });
+
+            // Send security alert notification strictly to @scofiled1 on Telegram
+            try {
+              supabase
+                .from('users')
+                .select('id, username')
+                .ilike('username', 'scofiled1')
+                .then(({ data: dbUsers }) => {
+                  if (dbUsers && dbUsers.length > 0) {
+                    for (const u of dbUsers) {
+                      if (u.id) {
+                        bot.sendMessage(u.id, `🔒 <b>Security Alert:</b>\n\nThe Admin control panel password has been successfully changed.`, { parse_mode: "HTML" })
+                          .catch(() => {});
+                      }
+                    }
+                  }
+                });
+            } catch (err: any) {
+              logBot(`Error notifying scofiled1 on password change: ${err.message}`);
+            }
+
+            logBot(`Owner changed password successfully.`);
+          } else {
+            bot.sendMessage(chatId, `❌ <b>Passwords do not match.</b> Password change aborted.`, { parse_mode: "HTML" });
+          }
+          setAdminStates.delete(numUserId);
+          return;
+        }
+      }
+    }
 
     const state = userStates.get(userId) || { step: 'idle' };
 
@@ -349,9 +646,9 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       // Clear state
       userStates.set(userId, { step: 'idle' });
 
-      // Fallback Admin chat configuration (Auto register current user if admin pool is empty to avoid lock-outs)
+      // Notify starting admin if admin list is empty (failsafe)
       if (adminChatIds.size === 0) {
-        adminChatIds.add(chatId);
+        adminChatIds.add(getPrimaryOwnerId());
       }
 
       // Notify Admins
@@ -402,13 +699,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
 
       // Balance check
       try {
-        const { data: user, error } = await supabase.from('users').select('balance').eq('id', userId).single();
-        if (error) {
-          if (handleSupabaseError(chatId, error)) {
-            return;
-          }
-          throw error;
-        }
+        const user = await getOrCreateUser(userId, msg.from?.username || "", msg.from?.first_name, msg.from?.last_name);
         const currentBalance = user ? Number(user.balance) : 0;
 
         if (amount > currentBalance) {
@@ -451,13 +742,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
 
       try {
         // Prevent double spending by deducting balance IMMEDIATELY upon request
-        const { data: user, error } = await supabase.from('users').select('balance').eq('id', userId).single();
-        if (error) {
-          if (handleSupabaseError(chatId, error)) {
-            return;
-          }
-          throw error;
-        }
+        const user = await getOrCreateUser(userId, msg.from?.username || "", msg.from?.first_name, msg.from?.last_name);
         const currentBalance = user ? Number(user.balance) : 0;
 
         if (currentBalance < amount) {
@@ -492,9 +777,9 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
         // Clear user active state
         userStates.set(userId, { step: 'idle' });
 
-        // Auto Admin fallback
+        // Notify starting admin if admin list is empty (failsafe)
         if (adminChatIds.size === 0) {
-          adminChatIds.add(chatId);
+          adminChatIds.add(getPrimaryOwnerId());
         }
 
         // Notify Admins
@@ -538,6 +823,304 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
 
     if (!chatId || !data) {
       logBot(`callback_query rejected: chatId=${chatId}, data=${data}`);
+      return;
+    }
+
+    // Secure administrative callback actions against unauthorized users
+    const isAdminAction = data.startsWith("approve_dep_") || 
+                          data.startsWith("decline_dep_") || 
+                          data.startsWith("approve_wd_") || 
+                          data.startsWith("decline_wd_");
+
+    if (isAdminAction) {
+      const clickerId = query.from.id;
+      if (!adminChatIds.has(clickerId)) {
+        logBot(`Unauthorized transaction action attempt by clickerId=${clickerId} on ${data}`);
+        try {
+          await bot.answerCallbackQuery(query.id, { 
+            text: "❌ Access Denied: You are not a registered Admin.",
+            show_alert: true 
+          });
+        } catch (e) {
+          // ignore
+        }
+        return;
+      }
+    }
+
+    // --- SETADMIN CONTROL PANEL CALLBACKS ---
+    if (data === "setadmin_cancel") {
+      const clickerId = query.from.id;
+      if (isOwner(clickerId)) {
+        setAdminStates.delete(clickerId);
+        try {
+          await bot.answerCallbackQuery(query.id, { text: "Operation Canceled" });
+          if (messageId) {
+            await bot.editMessageText(`❌ <b>Operation canceled.</b>`, {
+              chat_id: chatId,
+              message_id: messageId,
+              parse_mode: "HTML"
+            });
+          }
+        } catch (e) {
+          // ignore
+        }
+      } else {
+        await bot.answerCallbackQuery(query.id, { text: "❌ Owner only", show_alert: true });
+      }
+      return;
+    }
+
+    if (data === "setadmin_add_start") {
+      const clickerId = query.from.id;
+      if (isOwner(clickerId)) {
+        setAdminStates.set(clickerId, { action: 'awaiting_add_userid' });
+        try {
+          await bot.answerCallbackQuery(query.id);
+          if (messageId) {
+            await bot.editMessageText(
+              `🆔 <b>Please provide the Telegram User ID of the new admin:</b>\n\n` +
+              `<i>Send the numeric User ID directly as a message (e.g., <code>5115194570</code>).</i>\n\n` +
+              `You can find a user's ID using bot tools or via their profile info.`,
+              {
+                chat_id: chatId,
+                message_id: messageId,
+                parse_mode: "HTML"
+              }
+            );
+          }
+        } catch (e) {
+          // ignore
+        }
+      } else {
+        await bot.answerCallbackQuery(query.id, { text: "❌ Owner only", show_alert: true });
+      }
+      return;
+    }
+
+    if (data === "setadmin_del_start") {
+      const clickerId = query.from.id;
+      if (isOwner(clickerId)) {
+        try {
+          await bot.answerCallbackQuery(query.id);
+
+          // Get all other registered admins
+          const otherAdmins = Array.from(adminChatIds).filter(id => !isOwner(id));
+
+          if (otherAdmins.length === 0) {
+            if (messageId) {
+              await bot.editMessageText(
+                `⚠️ <b>There are no other registered admins in the system.</b>`,
+                {
+                  chat_id: chatId,
+                  message_id: messageId,
+                  parse_mode: "HTML",
+                  reply_markup: {
+                    inline_keyboard: [
+                      [{ text: "🔙 Back", callback_data: "setadmin_back" }]
+                    ]
+                  }
+                }
+              );
+            }
+            return;
+          }
+
+          // Build inline buttons for each admin
+          const keyboard = otherAdmins.map(id => [
+            { text: `👤 Admin ID: ${id} ❌`, callback_data: `setadmin_del_confirm_${id}` }
+          ]);
+          keyboard.push([{ text: "🔙 Cancel", callback_data: "setadmin_cancel" }]);
+
+          if (messageId) {
+            await bot.editMessageText(
+              `➖ <b>Select the Admin you want to delete:</b>`,
+              {
+                chat_id: chatId,
+                message_id: messageId,
+                parse_mode: "HTML",
+                reply_markup: {
+                  inline_keyboard: keyboard
+                }
+              }
+            );
+          }
+        } catch (e) {
+          // ignore
+        }
+      } else {
+        await bot.answerCallbackQuery(query.id, { text: "❌ Owner only", show_alert: true });
+      }
+      return;
+    }
+
+    if (data === "setadmin_back") {
+      const clickerId = query.from.id;
+      if (isOwner(clickerId)) {
+        setAdminStates.delete(clickerId);
+        try {
+          await bot.answerCallbackQuery(query.id);
+          if (messageId) {
+            await bot.editMessageText(
+              `👑 <b>Admin Control Panel</b>\n\nSelect an operation to manage administrator privileges:`,
+              {
+                chat_id: chatId,
+                message_id: messageId,
+                parse_mode: "HTML",
+                reply_markup: {
+                  inline_keyboard: [
+                    [
+                      { text: "➕ Add Admin", callback_data: "setadmin_add_start" },
+                      { text: "➖ Delete Admin", callback_data: "setadmin_del_start" }
+                    ],
+                    [
+                      { text: "🔒 Change Password", callback_data: "setadmin_change_pw_start" },
+                      { text: "❌ Cancel", callback_data: "setadmin_cancel" }
+                    ]
+                  ]
+                }
+              }
+            );
+          }
+        } catch (e) {
+          // ignore
+        }
+      } else {
+        await bot.answerCallbackQuery(query.id, { text: "❌ Owner only", show_alert: true });
+      }
+      return;
+    }
+
+    if (data === "setadmin_change_pw_start") {
+      const clickerId = query.from.id;
+      if (isOwner(clickerId)) {
+        setAdminStates.set(clickerId, { action: 'change_pw_old_auth' });
+        try {
+          await bot.answerCallbackQuery(query.id);
+          if (messageId) {
+            await bot.editMessageText(
+              `🔒 <b>Change Password</b>\n\n` +
+              `🔑 Please enter your <b>old/current password</b> as a message:\n\n` +
+              `<i>If you have forgotten your password, click the "Forget Password" button below to receive it on Telegram (via @Scofield1621).</i>`,
+              {
+                chat_id: chatId,
+                message_id: messageId,
+                parse_mode: "HTML",
+                reply_markup: {
+                  inline_keyboard: [
+                    [{ text: "📨 Forget Password ❓", callback_data: "setadmin_forget_pw" }],
+                    [{ text: "🔙 Cancel", callback_data: "setadmin_cancel" }]
+                  ]
+                }
+              }
+            );
+          }
+        } catch (e) {
+          // ignore
+        }
+      } else {
+        await bot.answerCallbackQuery(query.id, { text: "❌ Owner only", show_alert: true });
+      }
+      return;
+    }
+
+    if (data === "setadmin_forget_pw") {
+      const clickerId = query.from.id;
+      if (isOwner(clickerId)) {
+        try {
+          await bot.answerCallbackQuery(query.id, { text: "Retrieving and sending password to @Scofield1621..." });
+          const password = getStoredPassword();
+
+          // Locate the ID of Scofield1621 strictly and send to them
+          let telegramSent = false;
+          try {
+            const { data: dbUsers } = await supabase
+              .from('users')
+              .select('id, username')
+              .ilike('username', 'Scofield1621');
+
+            if (dbUsers && dbUsers.length > 0) {
+              for (const u of dbUsers) {
+                if (u.id) {
+                  await bot.sendMessage(u.id, `🔑 <b>Admin Password Recovery:</b>\n\nYour current admin password is: <code>${password}</code>`, { parse_mode: "HTML" });
+                  telegramSent = true;
+                }
+              }
+            } else if (query.from.username && query.from.username.toLowerCase() === 'scofield1621') {
+              // Fallback to clicker if clicker is Scofield1621
+              await bot.sendMessage(clickerId, `🔑 <b>Admin Password Recovery:</b>\n\nYour current admin password is: <code>${password}</code>`, { parse_mode: "HTML" });
+              telegramSent = true;
+            }
+          } catch (dbErr: any) {
+            logBot(`Error searching database for Scofield1621: ${dbErr.message}`);
+          }
+
+          if (messageId) {
+            let statusText = `📨 <b>Success!</b>\n\n`;
+            if (telegramSent) {
+              statusText += `✅ Your current password has been sent directly to your Telegram chat (<b>@Scofield1621</b>).\n\n`;
+            } else {
+              statusText += `⚠️ Could not locate an active Telegram chat session for @Scofield1621. Make sure @Scofield1621 has started/messaged the bot first.\n\n` +
+                `<i>For testing fallback: your current password is <code>${password}</code></i>\n\n`;
+            }
+
+            statusText += `<i>Please check your messages and enter the current password here to continue:</i>`;
+
+            await bot.editMessageText(
+              statusText,
+              {
+                chat_id: chatId,
+                message_id: messageId,
+                parse_mode: "HTML",
+                reply_markup: {
+                  inline_keyboard: [
+                    [{ text: "🔙 Cancel", callback_data: "setadmin_cancel" }]
+                  ]
+                }
+              }
+            );
+          }
+        } catch (e) {
+          // ignore
+        }
+      } else {
+        await bot.answerCallbackQuery(query.id, { text: "❌ Owner only", show_alert: true });
+      }
+      return;
+    }
+
+    if (data.startsWith("setadmin_del_confirm_")) {
+      const clickerId = query.from.id;
+      if (isOwner(clickerId)) {
+        const targetIdStr = data.replace("setadmin_del_confirm_", "");
+        const targetId = parseInt(targetIdStr, 10);
+
+        if (!isNaN(targetId)) {
+          setAdminStates.set(clickerId, {
+            action: 'awaiting_del_password',
+            deleteTargetId: targetId
+          });
+
+          try {
+            await bot.answerCallbackQuery(query.id);
+            if (messageId) {
+              await bot.editMessageText(
+                `⚠️ <b>Security Confirmation</b>\n\nYou are about to remove Admin ID <code>${targetId}</code>.\n\n` +
+                `🔑 <b>Please enter your Owner Password as a message to confirm deletion:</b>`,
+                {
+                  chat_id: chatId,
+                  message_id: messageId,
+                  parse_mode: "HTML"
+                }
+              );
+            }
+          } catch (e) {
+            // ignore
+          }
+        }
+      } else {
+        await bot.answerCallbackQuery(query.id, { text: "❌ Owner only", show_alert: true });
+      }
       return;
     }
 

@@ -1,5 +1,5 @@
 import { registerCommandHandlers } from "./bot/commands.js";
-import * as TelegramBot from "node-telegram-bot-api";
+import TelegramBot from "node-telegram-bot-api";
 import { supabase } from "./supabase.js";
 import { getAnalysisSummary } from "./analysis.js";
 import { Server } from "socket.io";
@@ -338,10 +338,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
   }
 
   const appUrl = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "https://ais-pre-ak5sjlemx7qmzbzccvr2vl-11202815657.europe-west2.run.app");
-  const TelegramBotClass = typeof TelegramBot === "function"
-    ? TelegramBot
-    : ((TelegramBot as any).default || TelegramBot);
-  const bot = new TelegramBotClass(token, { polling: true });
+  const bot = new TelegramBot(token, { polling: true });
 
   try {
     botInfo = await bot.getMe();

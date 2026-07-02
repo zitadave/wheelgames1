@@ -337,12 +337,25 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
     return null;
   }
 
-  const appUrl = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "https://ais-pre-ak5sjlemx7qmzbzccvr2vl-11202815657.europe-west2.run.app");
+  let appUrl = process.env.RENDER_EXTERNAL_URL || process.env.APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "https://ais-pre-ak5sjlemx7qmzbzccvr2vl-11202815657.europe-west2.run.app");
+  if (appUrl.includes("ais-pre-") && process.env.RENDER_EXTERNAL_URL) {
+    appUrl = process.env.RENDER_EXTERNAL_URL;
+  }
+  // Make sure we strip any trailing slash
+  appUrl = appUrl.replace(/\/$/, "");
   
   const TelegramBotClass = typeof TelegramBot === "function" 
     ? TelegramBot 
     : ((TelegramBot as any).default || TelegramBot);
   const bot = new (TelegramBotClass as any)(token, { polling: true });
+
+  bot.on("polling_error", (error: any) => {
+    if (error.code === 'ETELEGRAM' && error.message.includes('409 Conflict')) {
+      console.warn("Polling conflict detected. Another instance is likely running.");
+    } else {
+      console.error("Polling error:", error.message || error);
+    }
+  });
 
   try {
     botInfo = await bot.getMe();

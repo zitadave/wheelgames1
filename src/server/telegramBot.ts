@@ -1869,7 +1869,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
     }
     if (data === "control_broadcast") {
       await bot.answerCallbackQuery(query.id);
-      const composer: BroadcastComposer = { type: 'none', text: '', photoFileId: '', buttons: [] };
+      const composer = { step: 'choose_target' as const };
       await renderBroadcastDashboard(bot, chatId, userId, composer);
       return;
     }

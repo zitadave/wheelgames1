@@ -10,7 +10,8 @@ import confetti from 'canvas-confetti';
 import { playWin, playLoss } from './utils/sound';
 import { triggerHaptic } from './utils/haptic';
 
-const SOCKET_URL = window.location.origin;
+const BACKEND_URL = (import.meta as any).env?.VITE_BACKEND_URL || window.location.origin;
+const SOCKET_URL = BACKEND_URL;
 
 interface HistoryItem {
   roundId: number;
@@ -94,7 +95,7 @@ export default function App() {
   const [copiedId, setCopiedId] = useState<boolean>(false);
 
   useEffect(() => {
-    fetch('/api/bot-info')
+    fetch(`${BACKEND_URL}/api/bot-info`)
       .then(res => res.json())
       .then(data => {
         if (data.username) setBotUsername(data.username);

@@ -1,9 +1,9 @@
-import * as TelegramBot from "node-telegram-bot-api";
+import TelegramBot, { Message } from "node-telegram-bot-api";
 
 export function registerCommandHandlers(
   bot: TelegramBot,
   logBot: (msg: string) => void,
-  checkRegisteredAndHandle: (msg: TelegramBot.Message, handler: () => void) => Promise<void>,
+  checkRegisteredAndHandle: (msg: Message, handler: () => void) => Promise<void>,
   sendSupportCard: (chatId: number) => void
 ) {
   bot.onText(/\/language/, (msg) => {

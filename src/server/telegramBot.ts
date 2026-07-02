@@ -338,7 +338,11 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
   }
 
   const appUrl = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "https://ais-pre-ak5sjlemx7qmzbzccvr2vl-11202815657.europe-west2.run.app");
-  const bot = new TelegramBot(token, { polling: true });
+  
+  const TelegramBotClass = typeof TelegramBot === "function" 
+    ? TelegramBot 
+    : ((TelegramBot as any).default || TelegramBot);
+  const bot = new (TelegramBotClass as any)(token, { polling: true });
 
   try {
     botInfo = await bot.getMe();

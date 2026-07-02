@@ -26,13 +26,23 @@ export function getBotLogs() {
 
 // In-memory user states
 interface UserState {
-  step: 'idle' | 'deposit_amount' | 'deposit_bank' | 'deposit_msg' | 'withdraw_amount' | 'withdraw_bank' | 'withdraw_account';
+  step: string;
   amount?: number;
   bank?: string;
+  editingKey?: string;
+  row?: number;
+  col?: number;
+  new_label?: string;
+  cmd_name?: string;
+  cmd_desc?: string;
+  field?: string;
 }
 
 const userStates = new Map<string, UserState>();
 const userLanguages = new Map<number, string>();
+
+let startDepositFlowRef: ((chatId: number, userId: string) => void) | null = null;
+let startWithdrawalFlowRef: ((chatId: number, userId: string) => Promise<void>) | null = null;
 
 function t(key: string, lang: string = 'en', params?: Record<string, string>): string {
   const translations: Record<string, Record<string, string>> = {
@@ -193,6 +203,149 @@ function setStoredPassword(newPassword: string) {
   }
 }
 
+interface CustomButton {
+  text: string;
+  type: 'webapp' | 'url' | 'callback';
+  value: string;
+}
+
+interface CustomCommand {
+  command: string;
+  description: string;
+  text: string;
+  photo?: string;
+  buttons: CustomButton[][];
+}
+
+interface BankConfig {
+  name: string;
+  account: string;
+  owner_name: string;
+}
+
+interface PromptsConfig {
+  deposit_start_msg: string;
+  deposit_success_msg: string;
+  deposit_approved_msg: string;
+  deposit_declined_msg: string;
+  support_text: string;
+
+  withdraw_start_msg: string;
+  withdraw_telebirr_prompt: string;
+  withdraw_other_bank_prompt: string;
+  withdraw_success_msg: string;
+  withdraw_approved_msg: string;
+  withdraw_declined_msg: string;
+
+  welcome_msg: string;
+  welcome_guest_msg: string;
+  support_card_msg: string;
+
+  welcome_buttons: CustomButton[][];
+  custom_commands?: {
+    [cmd: string]: CustomCommand;
+  };
+
+  banks: {
+    [bankId: string]: BankConfig;
+  };
+}
+
+const DEFAULT_PROMPTS_CONFIG: PromptsConfig = {
+  deposit_start_msg: "💰 *ማስገባት የሚፈልጉትን መጠን ከ10 ብር ጀምሮ ያስገቡ።*\n\n_(Please type the amount of ETB you want to deposit, minimum 10 ETB):_",
+  deposit_success_msg: "✅ *Your deposit Request have been sent to admins please wait 1 min.*",
+  deposit_approved_msg: "✅ *Your deposit of {amount} ETB is confirmed.*\n🧾 *Ref:* `{ref}`",
+  deposit_declined_msg: "❌ *Your deposit of {amount} ETB is Declined.*",
+  support_text: "ሚያጋጥማቹ የክፍያ ችግር:\n@wheelgamessupport\n@wheelgamesupport1 ላይ ፃፉልን።",
+
+  withdraw_start_msg: "💰 *ማውጣት የሚፈልጉትን የገንዘብ መጠን ያስገቡ ?*\n\n💳 *የእርስዎ ባላንስ:* `{balance} ETB`\n\n_(Please type the amount you want to withdraw):_",
+  withdraw_telebirr_prompt: "📱 *እባክዎን ስልክ ቁጥርን ያስገቡ:*",
+  withdraw_other_bank_prompt: "🏦 *እባክዎን አካውንት ቁጥርን ያስገቡ:*",
+  withdraw_success_msg: "✅ *Your withdrawal Request of {amount} ETB have been sent to admins please wait 1 min.*",
+  withdraw_approved_msg: "✅ *Your withdrawal of {amount} ETB is confirmed.*\n🧾 *Ref:* `{ref}`",
+  withdraw_declined_msg: "❌ *Withdrawal Declined*\n\nYour withdrawal of *{amount} Birr* was declined and refunded.",
+
+  welcome_msg: "👋 *Welcome to ETB Game Hub, {name}!* 🎮\n\nExperience the thrill of real-time multiplayer gaming right here in Telegram!\n\n💰 *Your current balance:* `{balance}`\n\n🚀 *Available Games:*\n• 🟢 *Even/Odd* - High-octane multipliers and double-ups\n• 🏆 *Jackpot Arena* - Secure spots and sweep the pool prize\n• 🎡 *Wheel of Chance* - High stakes wheel of fortune\n\n👇 Click the button below to launch the Mini App and start playing immediately!",
+  welcome_guest_msg: "🎮 <b>Welcome to ETB Game Hub!</b> 🚀\n\nExperience the ultimate Telegram gaming destination! Test your prediction skills with 🟢 <b>Even/Odd</b>, enter the 🏆 <b>Jackpot Arena</b>, or spin the 🎡 <b>Wheel of Chance</b> to win incredible rewards.\n\n💎 <i>Play instantly, win with real-time multipliers, and withdraw directly to your favorite wallet!</i>",
+  support_card_msg: "📞 *Contact Support*\n\n📱 *Phone:* `+251-931-50-35-59`\n📧 *Email:* `support@wheelgame.et`\n💬 *Telegram:* @wheelgame_support\n\n⏰ *Support Hours:*\nMonday - Sunday: 9 AM - 9 PM\n\nWe're here to help!",
+
+  welcome_buttons: [
+    [
+      { text: "🎮 Play Game Hub 🚀", type: "webapp", value: "appUrl" }
+    ],
+    [
+      { text: "💸 Deposit / ማስገቢያ", type: "callback", value: "menu_deposit" },
+      { text: "🏦 Withdraw / ማውጫ", type: "callback", value: "menu_withdraw" }
+    ],
+    [
+      { text: "📞 Contact Support", type: "callback", value: "menu_support" }
+    ]
+  ],
+  custom_commands: {},
+
+  banks: {
+    "Telebirr": {
+      name: "📱 Telebirr",
+      account: "0931503559",
+      owner_name: "Tadese"
+    },
+    "CBE": {
+      name: "🏦 CBE (የኢትዮጵያ ንግድ ባንክ)",
+      account: "1000123456789",
+      owner_name: "Tadese"
+    },
+    "Abyssinia": {
+      name: "🏦 Abyssinia Bank",
+      account: "987654321",
+      owner_name: "Tadese"
+    },
+    "Dashen": {
+      name: "🏦 Dashen Bank",
+      account: "555444332",
+      owner_name: "Tadese"
+    }
+  }
+};
+
+const PROMPTS_CONFIG_FILE_PATH = path.join(process.cwd(), "prompts_config.json");
+let promptsConfig: PromptsConfig = { ...DEFAULT_PROMPTS_CONFIG };
+
+function loadPromptsConfig(): PromptsConfig {
+  try {
+    if (fs.existsSync(PROMPTS_CONFIG_FILE_PATH)) {
+      const data = JSON.parse(fs.readFileSync(PROMPTS_CONFIG_FILE_PATH, "utf8"));
+      return {
+        ...DEFAULT_PROMPTS_CONFIG,
+        ...data,
+        banks: {
+          ...DEFAULT_PROMPTS_CONFIG.banks,
+          ...(data.banks || {})
+        },
+        custom_commands: {
+          ...DEFAULT_PROMPTS_CONFIG.custom_commands,
+          ...(data.custom_commands || {})
+        }
+      };
+    }
+  } catch (err: any) {
+    logBot(`Error reading prompts config file: ${err.message}`);
+  }
+  return { ...DEFAULT_PROMPTS_CONFIG };
+}
+
+function savePromptsConfig(config: PromptsConfig) {
+  try {
+    fs.writeFileSync(PROMPTS_CONFIG_FILE_PATH, JSON.stringify(config, null, 2), "utf8");
+    promptsConfig = config;
+    logBot("Prompts configuration saved successfully.");
+  } catch (err: any) {
+    logBot(`Error writing prompts config file: ${err.message}`);
+  }
+}
+
+// Load dynamic prompts config
+promptsConfig = loadPromptsConfig();
+
 async function sendPasswordEmail(password: string): Promise<boolean> {
   try {
     const host = process.env.SMTP_HOST || "smtp.gmail.com";
@@ -337,10 +490,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
     return null;
   }
 
-  let appUrl = process.env.RENDER_EXTERNAL_URL || process.env.APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "https://ais-pre-ak5sjlemx7qmzbzccvr2vl-11202815657.europe-west2.run.app");
-  if (appUrl.includes("ais-pre-") && process.env.RENDER_EXTERNAL_URL) {
-    appUrl = process.env.RENDER_EXTERNAL_URL;
-  }
+  let appUrl = "https://wheelgames1.onrender.com";
   // Make sure we strip any trailing slash
   appUrl = appUrl.replace(/\/$/, "");
   
@@ -362,8 +512,8 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
     console.log(`Telegram Bot @${botInfo.username} initialized.`);
     await syncAdminsFromDB();
 
-    // Set bot commands
-    await bot.setMyCommands([
+    // Set bot commands including custom dynamic ones
+    const systemCommands = [
       { command: "start", description: "Launch the game hub and display menu" },
       { command: "play", description: "Launch the Web App immediately" },
       { command: "deposit", description: "Deposit ETB into your balance" },
@@ -371,7 +521,14 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       { command: "support", description: "Show contact support details" },
       { command: "language", description: "Change bot language" },
       { command: "cancel", description: "Cancel current operation or active flows" }
-    ]);
+    ];
+
+    const customCommandsList = Object.entries(promptsConfig.custom_commands || {}).map(([cmd, cfg]) => ({
+      command: cmd,
+      description: cfg.description || "Custom command"
+    }));
+
+    await bot.setMyCommands([...systemCommands, ...customCommandsList]);
 
     // Update main bot menu button to open the Web App
     try {
@@ -449,7 +606,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
     logBot(`startDepositFlow triggered for userId=${userId}, chatId=${chatId}`);
     try {
       userStates.set(userId, { step: 'deposit_amount' });
-      bot.sendMessage(chatId, "💰 *ማስገባት የሚፈልጉትን መጠን ከ10 ብር ጀምሮ ያስገቡ።*\n\n_(Please type the amount of ETB you want to deposit, minimum 10 ETB):_", { parse_mode: "Markdown" });
+      bot.sendMessage(chatId, promptsConfig.deposit_start_msg, { parse_mode: "Markdown" });
       logBot(`startDepositFlow message sent successfully to chatId=${chatId}`);
     } catch (e: any) {
       logBot(`Error in startDepositFlow for userId=${userId}: ${e?.message || e}`);
@@ -465,13 +622,18 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       logBot(`userId=${userId} current balance is ${currentBalance}`);
 
       userStates.set(userId, { step: 'withdraw_amount' });
-      bot.sendMessage(chatId, `💰 *ማውጣት የሚፈልጉትን የገንዘብ መጠን ያስገቡ ?*\n\n💳 *የእርስዎ ባላንስ:* \`${currentBalance.toLocaleString()} ETB\`\n\n_(Please type the amount you want to withdraw):_`, { parse_mode: "Markdown" });
+      const rawMsg = promptsConfig.withdraw_start_msg;
+      const msgText = rawMsg.replace(/{balance}/g, currentBalance.toLocaleString());
+      bot.sendMessage(chatId, msgText, { parse_mode: "Markdown" });
       logBot(`startWithdrawalFlow message sent successfully to chatId=${chatId}`);
     } catch (e: any) {
       logBot(`Error in startWithdrawalFlow for userId=${userId}: ${e?.message || e}`);
       bot.sendMessage(chatId, "⚠️ An error occurred preparing your withdrawal. Please try again.");
     }
   };
+
+  startDepositFlowRef = startDepositFlow;
+  startWithdrawalFlowRef = startWithdrawalFlow;
 
   const sendSupportCard = (chatId: number) => {
     logBot(`sendSupportCard triggered for chatId=${chatId}`);
@@ -563,39 +725,54 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
         // Ignored
       }
 
-      const welcomeMsg = `👋 *Welcome to ETB Game Hub, ${firstName}!* 🎮\n\n` +
+      const welcomeMsgPattern = promptsConfig.welcome_msg || 
+        `👋 *Welcome to ETB Game Hub, {name}!* 🎮\n\n` +
         `Experience the thrill of real-time multiplayer gaming right here in Telegram!\n\n` +
-        `💰 *Your current balance:* \`${userBalanceStr}\`\n\n` +
+        `💰 *Your current balance:* \`{balance}\`\n\n` +
         `🚀 *Available Games:*\n` +
         `• 🟢 *Even/Odd* - High-octane multipliers and double-ups\n` +
         `• 🏆 *Jackpot Arena* - Secure spots and sweep the pool prize\n` +
         `• 🎡 *Wheel of Chance* - High stakes wheel of fortune\n\n` +
         `👇 Click the button below to launch the Mini App and start playing immediately!`;
+        
+      const welcomeMsg = welcomeMsgPattern
+        .replace(/{name}/g, firstName)
+        .replace(/{balance}/g, userBalanceStr);
+
+      const welcomeButtonsRows = (promptsConfig.welcome_buttons || [
+        [
+          { text: "🎮 Play Game Hub 🚀", type: "webapp", value: "appUrl" }
+        ],
+        [
+          { text: "💸 Deposit / ማስገቢያ", type: "callback", value: "menu_deposit" },
+          { text: "🏦 Withdraw / ማውጫ", type: "callback", value: "menu_withdraw" }
+        ],
+        [
+          { text: "📞 Contact Support", type: "callback", value: "menu_support" }
+        ]
+      ]).map(row => 
+        row.map(btn => {
+          const btnVal = btn.value === 'appUrl' ? appUrl : btn.value;
+          if (btn.type === 'webapp') {
+            return { text: btn.text, web_app: { url: btnVal } };
+          } else if (btn.type === 'url') {
+            return { text: btn.text, url: btnVal };
+          } else {
+            return { text: btn.text, callback_data: btnVal };
+          }
+        })
+      );
 
       bot.sendMessage(chatId, welcomeMsg, {
         parse_mode: "Markdown",
         reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "🎮 Play Game Hub 🚀",
-                web_app: { url: appUrl }
-              }
-            ],
-            [
-              { text: "💸 Deposit / ማስገቢያ", callback_data: "menu_deposit" },
-              { text: "🏦 Withdraw / ማውጫ", callback_data: "menu_withdraw" }
-            ],
-            [
-              { text: "📞 Contact Support", callback_data: "menu_support" }
-            ]
-          ]
+          inline_keyboard: welcomeButtonsRows
         }
       });
     } else {
       pendingRegistrations.set(userId, { payload });
 
-      const desc = `🎮 <b>Welcome to ETB Game Hub!</b> 🚀\n\n` +
+      const desc = promptsConfig.welcome_guest_msg || `🎮 <b>Welcome to ETB Game Hub!</b> 🚀\n\n` +
         `Experience the ultimate Telegram gaming destination! Test your prediction skills with 🟢 <b>Even/Odd</b>, enter the 🏆 <b>Jackpot Arena</b>, or spin the 🎡 <b>Wheel of Chance</b> to win incredible rewards.\n\n` +
         `💎 <i>Play instantly, win with real-time multipliers, and withdraw directly to your favorite wallet!</i>`;
 
@@ -709,12 +886,130 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
             { text: "📊 Analysis", callback_data: "control_analysis" }
           ],
           [
-            { text: "📢 Broadcast", callback_data: "control_broadcast" }
+            { text: "📢 Broadcast", callback_data: "control_broadcast" },
+            { text: "📝 Edit Prompts", callback_data: "control_edit" }
           ]
         ]
       }
     });
   });
+
+  bot.onText(/\/edit/, (msg) => {
+    const chatId = msg.chat.id;
+    const userId = msg.from?.id;
+
+    if (!userId || !adminChatIds.has(userId)) {
+      return;
+    }
+
+    sendEditPanelMenu(chatId);
+  });
+
+  function sendEditPanelMenu(chatId: number, messageId?: number) {
+    const text = "📝 <b>Edit Panel</b>\n\nSelect the flow or section you want to customize below:";
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: "👋 Welcome & Support Prompts", callback_data: "edit_section_welcome" }
+        ],
+        [
+          { text: "🔘 Welcome Buttons Menu", callback_data: "edit_section_welcome_buttons" }
+        ],
+        [
+          { text: "📥 Deposit Flow Prompts", callback_data: "edit_section_deposit" }
+        ],
+        [
+          { text: "📤 Withdrawal Flow Prompts", callback_data: "edit_section_withdrawal" }
+        ],
+        [
+          { text: "🏦 Bank Accounts Detail", callback_data: "edit_section_banks" }
+        ],
+        [
+          { text: "✨ Custom Commands Manager", callback_data: "edit_section_custom_commands" }
+        ]
+      ]
+    };
+
+    if (messageId) {
+      bot.editMessageText(text, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: "HTML",
+        reply_markup: keyboard
+      }).catch(e => console.error("Edit panel update failed:", e));
+    } else {
+      bot.sendMessage(chatId, text, {
+        parse_mode: "HTML",
+        reply_markup: keyboard
+      }).catch(e => console.error("Edit panel send failed:", e));
+    }
+  }
+
+  async function sendCustomCommandEditMenu(chatId: number, cmdName: string, messageId?: number) {
+    const cmd = promptsConfig.custom_commands?.[cmdName];
+    if (!cmd) return;
+    
+    let text = `🛠️ <b>Custom Command Settings: /${cmdName}</b>\n\n` +
+      `• <b>Description:</b> <code>${cmd.description || 'None'}</code>\n` +
+      `• <b>Response Text:</b>\n<pre>${cmd.text}</pre>\n` +
+      `• <b>Photo:</b> <code>${cmd.photo ? 'Enabled (File ID: ' + cmd.photo.slice(0, 15) + '...)' : 'Disabled'}</code>\n` +
+      `• <b>Buttons:</b> <code>${cmd.buttons && cmd.buttons.length > 0 ? cmd.buttons.flat().length + ' custom buttons' : 'None'}</code>\n\n` +
+      `Select which aspect you want to configure:`;
+      
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: "📝 Edit Response Text", callback_data: `ccmd_val_${cmdName}_text` }],
+        [{ text: "🏷️ Edit Description", callback_data: `ccmd_val_${cmdName}_desc` }],
+        [{ text: "🖼️ Set Photo (File ID/URL)", callback_data: `ccmd_val_${cmdName}_photo` }],
+        [{ text: "🚫 Clear Photo", callback_data: `ccmd_val_${cmdName}_photo_clear` }],
+        [{ text: "🔘 Manage Command Buttons", callback_data: `ccmd_val_${cmdName}_buttons` }],
+        [{ text: "🗑️ Delete Command", callback_data: `ccmd_val_${cmdName}_delete` }],
+        [{ text: "🔙 Back to Custom Commands", callback_data: "edit_section_custom_commands" }]
+      ]
+    };
+    
+    if (messageId) {
+      await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard }).catch(() => {});
+    } else {
+      await bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: keyboard }).catch(() => {});
+    }
+  }
+
+  async function sendCustomCommandButtonsPanel(chatId: number, cmdName: string, messageId?: number) {
+    const cmd = promptsConfig.custom_commands?.[cmdName];
+    if (!cmd) return;
+    
+    let text = `🔘 <b>Buttons Manager for /${cmdName}</b>\n\n` +
+      `Configure custom inline buttons that appear below the message for /${cmdName}.\n\n`;
+      
+    const inlineKeyboard: any[] = [];
+    const buttons = cmd.buttons || [];
+    
+    if (buttons.length === 0) {
+      text += `<i>No buttons configured yet.</i>`;
+    } else {
+      buttons.forEach((row, rIndex) => {
+        const rowButtons: any[] = [];
+        row.forEach((btn, cIndex) => {
+          text += `• Row ${rIndex + 1}, Col ${cIndex + 1}: <b>"${btn.text}"</b> (Type: <code>${btn.type}</code>)\n`;
+          rowButtons.push({
+            text: `✏️ Row ${rIndex + 1} Col ${cIndex + 1}: ${btn.text}`,
+            callback_data: `cc_btn_click_${cmdName}_${rIndex}_${cIndex}`
+          });
+        });
+        inlineKeyboard.push(rowButtons);
+      });
+    }
+    
+    inlineKeyboard.push([{ text: "➕ Add New Button", callback_data: `cc_btn_add_${cmdName}` }]);
+    inlineKeyboard.push([{ text: "🔙 Back to Command", callback_data: `ccmd_edit_${cmdName}` }]);
+    
+    if (messageId) {
+      await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: { inline_keyboard: inlineKeyboard } }).catch(() => {});
+    } else {
+      await bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: { inline_keyboard: inlineKeyboard } }).catch(() => {});
+    }
+  }
 
   // Build inline keyboard for campaign messages sent to users
   function buildCampaignReplyMarkup(composer: BroadcastComposer, webAppUrl: string) {
@@ -1166,9 +1461,136 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
     if (!userId) return;
 
     const text = msg.text?.trim() || "";
-    if (text.startsWith("/")) return; // Ignore commands
+    if (text.startsWith("/")) {
+      const commandParts = text.slice(1).split(" ");
+      let cmdName = commandParts[0].toLowerCase();
+      if (cmdName.includes("@")) {
+        cmdName = cmdName.split("@")[0];
+      }
+      
+      const customCmd = promptsConfig.custom_commands?.[cmdName];
+      if (customCmd) {
+        try {
+          const buttons = (customCmd.buttons || []).map(row => 
+            row.map(btn => {
+              const btnVal = btn.value === 'appUrl' ? appUrl : btn.value;
+              if (btn.type === 'webapp') {
+                return { text: btn.text, web_app: { url: btnVal } };
+              } else if (btn.type === 'url') {
+                return { text: btn.text, url: btnVal };
+              } else {
+                return { text: btn.text, callback_data: btnVal };
+              }
+            })
+          );
+
+          if (customCmd.photo) {
+            await bot.sendPhoto(chatId, customCmd.photo, {
+              caption: customCmd.text,
+              parse_mode: "HTML",
+              reply_markup: buttons.length > 0 ? { inline_keyboard: buttons } : undefined
+            });
+          } else {
+            await bot.sendMessage(chatId, customCmd.text, {
+              parse_mode: "HTML",
+              reply_markup: buttons.length > 0 ? { inline_keyboard: buttons } : undefined
+            });
+          }
+        } catch (e: any) {
+          logBot(`Error executing custom command /${cmdName}: ${e.message}`);
+          await bot.sendMessage(chatId, `❌ Failed to execute command /${cmdName}.`);
+        }
+      }
+      return;
+    }
 
     const numUserId = msg.from?.id;
+
+    // Process admin prompt-editing interactive states
+    const editState = userStates.get(userId);
+    if (editState && editState.step === 'edit_prompt_value' && editState.editingKey) {
+      if (!numUserId || !adminChatIds.has(numUserId)) {
+        userStates.set(userId, { step: 'idle' });
+        return;
+      }
+
+      const key = editState.editingKey;
+      
+      try {
+        if (key.startsWith("bank_")) {
+          // Format: bank_{bankId}_{prop}
+          const parts = key.replace("bank_", "").split("_");
+          const bankId = parts[0];
+          const prop = parts.slice(1).join("_"); // 'name' | 'account' | 'owner_name'
+          
+          if (!promptsConfig.banks[bankId]) {
+            promptsConfig.banks[bankId] = { name: bankId, account: "", owner_name: "" };
+          }
+          (promptsConfig.banks[bankId] as any)[prop] = text;
+          savePromptsConfig(promptsConfig);
+
+          userStates.set(userId, { step: 'idle' });
+          await bot.sendMessage(chatId, `✅ <b>Successfully updated ${bankId} bank property "${prop}"!</b>`, { parse_mode: "HTML" });
+          
+          // Render bank menu back to admin
+          const bank = promptsConfig.banks[bankId];
+          const editBankText = `🏦 <b>Bank Settings: ${bankId}</b>\n\n` +
+            `🏷️ <b>Display Name:</b> <code>${bank.name}</code>\n` +
+            `💳 <b>Account/Phone:</b> <code>${bank.account}</code>\n` +
+            `👤 <b>Owner Name:</b> <code>${bank.owner_name}</code>\n\n` +
+            `Select which property you want to edit:`;
+          const keyboard = {
+            inline_keyboard: [
+              [{ text: "🏷️ Edit Display Name", callback_data: `edit_bankval_${bankId}_name` }],
+              [{ text: "💳 Edit Account/Phone", callback_data: `edit_bankval_${bankId}_account` }],
+              [{ text: "👤 Edit Owner Name", callback_data: `edit_bankval_${bankId}_owner_name` }],
+              [{ text: "🔙 Back to Banks", callback_data: "edit_section_banks" }]
+            ]
+          };
+          await bot.sendMessage(chatId, editBankText, { parse_mode: "HTML", reply_markup: keyboard });
+          return;
+        } else {
+          // Regular prompt key
+          (promptsConfig as any)[key] = text;
+          savePromptsConfig(promptsConfig);
+
+          userStates.set(userId, { step: 'idle' });
+          await bot.sendMessage(chatId, `✅ <b>Successfully updated prompt for "${key}"!</b>`, { parse_mode: "HTML" });
+
+          // Render corresponding section menu
+          const section = key.startsWith("withdraw") ? "edit_section_withdrawal" : "edit_section_deposit";
+          const sectionTitle = key.startsWith("withdraw") ? "📤 Withdrawal Flow Prompts" : "📥 Deposit Flow Prompts";
+          const sectionButtons = key.startsWith("withdraw") ? [
+            [{ text: "💰 Start Message", callback_data: "edit_key_withdraw_start_msg" }],
+            [{ text: "📱 Telebirr Phone Prompt", callback_data: "edit_key_withdraw_telebirr_prompt" }],
+            [{ text: "🏦 Other Bank Account Prompt", callback_data: "edit_key_withdraw_other_bank_prompt" }],
+            [{ text: "✅ Success Message", callback_data: "edit_key_withdraw_success_msg" }],
+            [{ text: "🎉 Approved Message", callback_data: "edit_key_withdraw_approved_msg" }],
+            [{ text: "❌ Declined Message", callback_data: "edit_key_withdraw_declined_msg" }],
+            [{ text: "🔙 Back", callback_data: "control_edit" }]
+          ] : [
+            [{ text: "💰 Start Message", callback_data: "edit_key_deposit_start_msg" }],
+            [{ text: "📞 Support Username/Text", callback_data: "edit_key_support_text" }],
+            [{ text: "✅ Success Message", callback_data: "edit_key_deposit_success_msg" }],
+            [{ text: "🎉 Approved Message", callback_data: "edit_key_deposit_approved_msg" }],
+            [{ text: "❌ Declined Message", callback_data: "edit_key_deposit_declined_msg" }],
+            [{ text: "🔙 Back", callback_data: "control_edit" }]
+          ];
+
+          await bot.sendMessage(chatId, `<b>${sectionTitle}</b>\nSelect which prompt or instruction you want to edit:`, {
+            parse_mode: "HTML",
+            reply_markup: {
+              inline_keyboard: sectionButtons
+            }
+          });
+          return;
+        }
+      } catch (err: any) {
+        logBot(`Error updating prompt value: ${err.message}`);
+        await bot.sendMessage(chatId, `❌ <b>Failed to save prompt:</b> ${err.message}`, { parse_mode: "HTML" });
+        return;
+      }
+    }
 
     // Process admin broadcast interactive states
     if (numUserId && adminChatIds.has(numUserId)) {
@@ -1476,16 +1898,17 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
         amount
       });
 
+      const bk = promptsConfig.banks;
       return bot.sendMessage(chatId, "እባክዎት ማስገባት የሚፈልጉበትን ባንክ ይምረጡ።", {
         reply_markup: {
           inline_keyboard: [
             [
-              { text: "📱 Telebirr", callback_data: `dep_bank_Telebirr` },
-              { text: "🏦 CBE (የኢትዮጵያ ንግድ ባንክ)", callback_data: `dep_bank_CBE` }
+              { text: bk["Telebirr"]?.name || "📱 Telebirr", callback_data: `dep_bank_Telebirr` },
+              { text: bk["CBE"]?.name || "🏦 CBE (የኢትዮጵያ ንግድ ባንክ)", callback_data: `dep_bank_CBE` }
             ],
             [
-              { text: "🏦 Abyssinia Bank", callback_data: `dep_bank_Abyssinia` },
-              { text: "🏦 Dashen Bank", callback_data: `dep_bank_Dashen` }
+              { text: bk["Abyssinia"]?.name || "🏦 Abyssinia Bank", callback_data: `dep_bank_Abyssinia` },
+              { text: bk["Dashen"]?.name || "🏦 Dashen Bank", callback_data: `dep_bank_Dashen` }
             ]
           ]
         }
@@ -1587,16 +2010,17 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
         });
 
         // Prompt bank selection
+        const bk = promptsConfig.banks;
         return bot.sendMessage(chatId, "እባክዎን የሚያወጡበትን ባንክ ይምረጡ።", {
           reply_markup: {
             inline_keyboard: [
               [
-                { text: "📱 Telebirr", callback_data: `wd_bank_Telebirr` },
-                { text: "🏦 CBE (የኢትዮጵያ ንግድ ባንክ)", callback_data: `wd_bank_CBE` }
+                { text: bk["Telebirr"]?.name || "📱 Telebirr", callback_data: `wd_bank_Telebirr` },
+                { text: bk["CBE"]?.name || "🏦 CBE (የኢትዮጵያ ንግድ ባንክ)", callback_data: `wd_bank_CBE` }
               ],
               [
-                { text: "🏦 Abyssinia Bank", callback_data: `wd_bank_Abyssinia` },
-                { text: "🏦 Dashen Bank", callback_data: `wd_bank_Dashen` }
+                { text: bk["Abyssinia"]?.name || "🏦 Abyssinia Bank", callback_data: `wd_bank_Abyssinia` },
+                { text: bk["Dashen"]?.name || "🏦 Dashen Bank", callback_data: `wd_bank_Dashen` }
               ]
             ]
           }
@@ -1644,7 +2068,8 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
         });
 
         // Notify User
-        bot.sendMessage(chatId, "✅ *Your withdrawal Request have been sent to admins please wait 1 min.*", { parse_mode: "Markdown" });
+        const successMsgText = promptsConfig.withdraw_success_msg.replace(/{amount}/g, amount.toLocaleString());
+        bot.sendMessage(chatId, successMsgText, { parse_mode: "Markdown" });
 
         // Push real-time balance update to socket clients instantly
         io.emit('balanceUpdated', { userId, balance: newBalance });
@@ -1684,6 +2109,280 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
         console.error("Deducting balance for withdrawal request failed:", err);
         bot.sendMessage(chatId, "⚠️ Failed to submit withdrawal request. Please retry.");
       }
+    }
+
+    // 5. WELCOME BUTTON: EDIT LABEL
+    if (state.step === 'awaiting_wbtn_label_change') {
+      if (!numUserId || !adminChatIds.has(numUserId)) return;
+      const rIndex = state.row;
+      const cIndex = state.col;
+      if (rIndex !== undefined && cIndex !== undefined && promptsConfig.welcome_buttons?.[rIndex]?.[cIndex]) {
+        promptsConfig.welcome_buttons[rIndex][cIndex].text = text;
+        savePromptsConfig(promptsConfig);
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, `✅ <b>Successfully updated welcome button label to: "${text}"</b>`, { parse_mode: "HTML" });
+        
+        // Return to welcome buttons panel
+        const buttons = promptsConfig.welcome_buttons || [];
+        let pText = "🔘 <b>Welcome Buttons Editor</b>\n\nThese are the buttons shown below your Welcome Message for players:\n\n";
+        const inlineKeyboard: any[] = [];
+        buttons.forEach((row, rIdx) => {
+          const rowButtons: any[] = [];
+          row.forEach((btn, cIdx) => {
+            pText += `• Row ${rIdx + 1}, Col ${cIdx + 1}: <b>"${btn.text}"</b> (Type: <code>${btn.type}</code>)\n`;
+            rowButtons.push({
+              text: `✏️ Row ${rIdx + 1} Col ${cIdx + 1}: ${btn.text}`,
+              callback_data: `edit_wbtn_click_${rIdx}_${cIdx}`
+            });
+          });
+          inlineKeyboard.push(rowButtons);
+        });
+        inlineKeyboard.push([{ text: "➕ Add New Button", callback_data: "edit_wbtn_add" }]);
+        inlineKeyboard.push([{ text: "🔙 Back", callback_data: "control_edit" }]);
+        await bot.sendMessage(chatId, pText, { parse_mode: "HTML", reply_markup: { inline_keyboard: inlineKeyboard } });
+      }
+      return;
+    }
+
+    // 6. WELCOME BUTTON: EDIT URL
+    if (state.step === 'awaiting_wbtn_url_change') {
+      if (!numUserId || !adminChatIds.has(numUserId)) return;
+      const rIndex = state.row;
+      const cIndex = state.col;
+      if (rIndex !== undefined && cIndex !== undefined && promptsConfig.welcome_buttons?.[rIndex]?.[cIndex]) {
+        promptsConfig.welcome_buttons[rIndex][cIndex].type = 'url';
+        promptsConfig.welcome_buttons[rIndex][cIndex].value = text;
+        savePromptsConfig(promptsConfig);
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, `✅ <b>Successfully updated button link URL to: "${text}"</b>`, { parse_mode: "HTML" });
+        
+        // Return to welcome buttons panel
+        const buttons = promptsConfig.welcome_buttons || [];
+        let pText = "🔘 <b>Welcome Buttons Editor</b>\n\nThese are the buttons shown below your Welcome Message for players:\n\n";
+        const inlineKeyboard: any[] = [];
+        buttons.forEach((row, rIdx) => {
+          const rowButtons: any[] = [];
+          row.forEach((btn, cIdx) => {
+            pText += `• Row ${rIdx + 1}, Col ${cIdx + 1}: <b>"${btn.text}"</b> (Type: <code>${btn.type}</code>)\n`;
+            rowButtons.push({
+              text: `✏️ Row ${rIdx + 1} Col ${cIdx + 1}: ${btn.text}`,
+              callback_data: `edit_wbtn_click_${rIdx}_${cIdx}`
+            });
+          });
+          inlineKeyboard.push(rowButtons);
+        });
+        inlineKeyboard.push([{ text: "➕ Add New Button", callback_data: "edit_wbtn_add" }]);
+        inlineKeyboard.push([{ text: "🔙 Back", callback_data: "control_edit" }]);
+        await bot.sendMessage(chatId, pText, { parse_mode: "HTML", reply_markup: { inline_keyboard: inlineKeyboard } });
+      }
+      return;
+    }
+
+    // 7. WELCOME BUTTON: ADD LABEL
+    if (state.step === 'awaiting_wbtn_add_label') {
+      if (!numUserId || !adminChatIds.has(numUserId)) return;
+      userStates.set(userId, {
+        step: 'idle',
+        new_label: text
+      });
+      const choiceText = `🔧 <b>Select Button Type for "${text}":</b>\n\nChoose what this button should do when clicked:`;
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "🎮 Play WebApp Game", callback_data: `add_wbtn_type_webapp` }],
+          [{ text: "💳 Callback Deposit Flow", callback_data: `add_wbtn_type_cb_dep` }],
+          [{ text: "🏦 Callback Withdraw Flow", callback_data: `add_wbtn_type_cb_wd` }],
+          [{ text: "📞 Callback Support Flow", callback_data: `add_wbtn_type_cb_sup` }],
+          [{ text: "🔗 Custom URL Link", callback_data: `add_wbtn_type_url` }],
+          [{ text: "🔙 Cancel", callback_data: `edit_section_welcome_buttons` }]
+        ]
+      };
+      await bot.sendMessage(chatId, choiceText, { parse_mode: "HTML", reply_markup: keyboard });
+      return;
+    }
+
+    // 8. WELCOME BUTTON: ADD URL
+    if (state.step === 'awaiting_wbtn_add_url') {
+      if (!numUserId || !adminChatIds.has(numUserId)) return;
+      const label = state.new_label || "New Button";
+      if (!promptsConfig.welcome_buttons) promptsConfig.welcome_buttons = [];
+      promptsConfig.welcome_buttons.push([{ text: label, type: 'url', value: text }]);
+      savePromptsConfig(promptsConfig);
+      userStates.set(userId, { step: 'idle' });
+      await bot.sendMessage(chatId, `✅ <b>Successfully added new button with URL!</b>`, { parse_mode: "HTML" });
+      
+      // Return to welcome buttons panel
+      const buttons = promptsConfig.welcome_buttons || [];
+      let pText = "🔘 <b>Welcome Buttons Editor</b>\n\nThese are the buttons shown below your Welcome Message for players:\n\n";
+      const inlineKeyboard: any[] = [];
+      buttons.forEach((row, rIdx) => {
+        const rowButtons: any[] = [];
+        row.forEach((btn, cIdx) => {
+          pText += `• Row ${rIdx + 1}, Col ${cIdx + 1}: <b>"${btn.text}"</b> (Type: <code>${btn.type}</code>)\n`;
+          rowButtons.push({
+            text: `✏️ Row ${rIdx + 1} Col ${cIdx + 1}: ${btn.text}`,
+            callback_data: `edit_wbtn_click_${rIdx}_${cIdx}`
+          });
+        });
+        inlineKeyboard.push(rowButtons);
+      });
+      inlineKeyboard.push([{ text: "➕ Add New Button", callback_data: "edit_wbtn_add" }]);
+      inlineKeyboard.push([{ text: "🔙 Back", callback_data: "control_edit" }]);
+      await bot.sendMessage(chatId, pText, { parse_mode: "HTML", reply_markup: { inline_keyboard: inlineKeyboard } });
+      return;
+    }
+
+    // 9. CUSTOM COMMAND: REGISTER NAME
+    if (state.step === 'awaiting_ccmd_name') {
+      if (!numUserId || !adminChatIds.has(numUserId)) return;
+      const cmdName = text.toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (!cmdName) {
+        return bot.sendMessage(chatId, "❌ <b>Invalid command name.</b> Please send a single word with lowercase letters/numbers only:");
+      }
+      if (promptsConfig.custom_commands?.[cmdName] || ['start', 'play', 'deposit', 'withdraw', 'support', 'language', 'cancel'].includes(cmdName)) {
+        return bot.sendMessage(chatId, `❌ Command name <b>/${cmdName}</b> is already taken or reserved. Please enter a different command name:`, { parse_mode: "HTML" });
+      }
+
+      if (!promptsConfig.custom_commands) promptsConfig.custom_commands = {};
+      promptsConfig.custom_commands[cmdName] = {
+        command: cmdName,
+        description: "Custom dynamic command",
+        text: "Default response text. Please edit this message.",
+        buttons: []
+      };
+      savePromptsConfig(promptsConfig);
+
+      // Register with telegram bot commands menu
+      try {
+        const systemCommands = [
+          { command: "start", description: "Launch the game hub and display menu" },
+          { command: "play", description: "Launch the Web App immediately" },
+          { command: "deposit", description: "Deposit ETB into your balance" },
+          { command: "withdraw", description: "Withdraw ETB from your balance" },
+          { command: "support", description: "Show contact support details" },
+          { command: "language", description: "Change bot language" },
+          { command: "cancel", description: "Cancel current operation or active flows" }
+        ];
+
+        const customCommandsList = Object.entries(promptsConfig.custom_commands || {}).map(([cmd, cfg]) => ({
+          command: cmd,
+          description: cfg.description || "Custom command"
+        }));
+
+        await bot.setMyCommands([...systemCommands, ...customCommandsList]);
+      } catch (err: any) {
+        logBot(`Failed to set Telegram commands: ${err.message}`);
+      }
+
+      userStates.set(userId, { step: 'idle' });
+      await bot.sendMessage(chatId, `✅ Successfully registered command <b>/${cmdName}</b>!`, { parse_mode: "HTML" });
+      await sendCustomCommandEditMenu(chatId, cmdName);
+      return;
+    }
+
+    // 10. CUSTOM COMMAND: VAL CHANGE
+    if (state.step === 'awaiting_ccmd_val_change') {
+      if (!numUserId || !adminChatIds.has(numUserId)) return;
+      const cmdName = state.cmd_name;
+      const field = state.field;
+      if (cmdName && field && promptsConfig.custom_commands?.[cmdName]) {
+        if (field === 'text') {
+          promptsConfig.custom_commands[cmdName].text = text;
+        } else if (field === 'desc') {
+          promptsConfig.custom_commands[cmdName].description = text;
+          
+          // Re-sync command menu so description is immediately updated
+          try {
+            const systemCommands = [
+              { command: "start", description: "Launch the game hub and display menu" },
+              { command: "play", description: "Launch the Web App immediately" },
+              { command: "deposit", description: "Deposit ETB into your balance" },
+              { command: "withdraw", description: "Withdraw ETB from your balance" },
+              { command: "support", description: "Show contact support details" },
+              { command: "language", description: "Change bot language" },
+              { command: "cancel", description: "Cancel current operation or active flows" }
+            ];
+
+            const customCommandsList = Object.entries(promptsConfig.custom_commands || {}).map(([cmd, cfg]) => ({
+              command: cmd,
+              description: cfg.description || "Custom command"
+            }));
+
+            await bot.setMyCommands([...systemCommands, ...customCommandsList]);
+          } catch (err: any) {}
+        } else if (field === 'photo') {
+          let photoVal = text;
+          if (msg.photo && msg.photo.length > 0) {
+            photoVal = msg.photo[msg.photo.length - 1].file_id;
+          }
+          promptsConfig.custom_commands[cmdName].photo = photoVal;
+        }
+        
+        savePromptsConfig(promptsConfig);
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, `✅ Updated <b>/${cmdName}</b> property <b>"${field}"</b>!`, { parse_mode: "HTML" });
+        await sendCustomCommandEditMenu(chatId, cmdName);
+      }
+      return;
+    }
+
+    // 11. CUSTOM COMMAND BUTTON: EDIT LABEL
+    if (state.step === 'awaiting_cc_btn_label_change') {
+      if (!numUserId || !adminChatIds.has(numUserId)) return;
+      const cmdName = state.cmd_name;
+      const rIndex = state.row;
+      const cIndex = state.col;
+      if (cmdName && rIndex !== undefined && cIndex !== undefined && promptsConfig.custom_commands?.[cmdName]?.buttons?.[rIndex]?.[cIndex]) {
+        promptsConfig.custom_commands[cmdName].buttons[rIndex][cIndex].text = text;
+        savePromptsConfig(promptsConfig);
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, `✅ Successfully updated button label!`, { parse_mode: "HTML" });
+        await sendCustomCommandButtonsPanel(chatId, cmdName);
+      }
+      return;
+    }
+
+    // 12. CUSTOM COMMAND BUTTON: ADD LABEL
+    if (state.step === 'awaiting_cc_btn_add_label') {
+      if (!numUserId || !adminChatIds.has(numUserId)) return;
+      const cmdName = state.cmd_name;
+      if (cmdName) {
+        userStates.set(userId, {
+          step: 'idle',
+          cmd_name: cmdName,
+          new_label: text
+        });
+        const choiceText = `🔧 <b>Select Button Type for "${text}":</b>\n\nChoose what this button should do when clicked:`;
+        const keyboard = {
+          inline_keyboard: [
+            [{ text: "🎮 Play WebApp Game", callback_data: `cc_add_type_${cmdName}_webapp` }],
+            [{ text: "💳 Callback Deposit Flow", callback_data: `cc_add_type_${cmdName}_cb_dep` }],
+            [{ text: "🏦 Callback Withdraw Flow", callback_data: `cc_add_type_${cmdName}_cb_wd` }],
+            [{ text: "📞 Callback Support Flow", callback_data: `cc_add_type_${cmdName}_cb_sup` }],
+            [{ text: "🔗 Custom URL Link", callback_data: `cc_add_type_${cmdName}_url` }],
+            [{ text: "🔙 Cancel", callback_data: `ccmd_val_${cmdName}_buttons` }]
+          ]
+        };
+        await bot.sendMessage(chatId, choiceText, { parse_mode: "HTML", reply_markup: keyboard });
+      }
+      return;
+    }
+
+    // 13. CUSTOM COMMAND BUTTON: ADD URL
+    if (state.step === 'awaiting_cc_btn_add_url') {
+      if (!numUserId || !adminChatIds.has(numUserId)) return;
+      const cmdName = state.cmd_name;
+      const label = state.new_label || "New Button";
+      if (cmdName && promptsConfig.custom_commands?.[cmdName]) {
+        if (!promptsConfig.custom_commands[cmdName].buttons) {
+          promptsConfig.custom_commands[cmdName].buttons = [];
+        }
+        promptsConfig.custom_commands[cmdName].buttons.push([{ text: label, type: 'url', value: text }]);
+        savePromptsConfig(promptsConfig);
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, `✅ Successfully added button "${label}" with URL!`, { parse_mode: "HTML" });
+        await sendCustomCommandButtonsPanel(chatId, cmdName);
+      }
+      return;
     }
   });
 
@@ -1765,33 +2464,48 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       });
 
       // Show warm greeting and all commands with inline menu buttons
-      const greetingMsg = `🎉 *Congratulations, ${firstName}!* 🎮\n\n` +
-        `Your account has been verified and registered successfully. You are now ready to play!\n\n` +
-        `💰 *Starting Balance:* \`100,000 ETB\` (Demo)\n\n` +
+      const welcomeMsgPattern = promptsConfig.welcome_msg || 
+        `👋 *Welcome to ETB Game Hub, {name}!* 🎮\n\n` +
+        `Experience the thrill of real-time multiplayer gaming right here in Telegram!\n\n` +
+        `💰 *Your current balance:* \`{balance}\`\n\n` +
         `🚀 *Available Games:*\n` +
         `• 🟢 *Even/Odd* - High-octane multipliers and double-ups\n` +
         `• 🏆 *Jackpot Arena* - Secure spots and sweep the pool prize\n` +
         `• 🎡 *Wheel of Chance* - High stakes wheel of fortune\n\n` +
         `👇 Click the button below to launch the Mini App and start playing immediately!`;
+        
+      const greetingMsg = welcomeMsgPattern
+        .replace(/{name}/g, firstName)
+        .replace(/{balance}/g, "100,000 ETB");
+
+      const welcomeButtonsRows = (promptsConfig.welcome_buttons || [
+        [
+          { text: "🎮 Play Game Hub 🚀", type: "webapp", value: "appUrl" }
+        ],
+        [
+          { text: "💸 Deposit / ማስገቢያ", type: "callback", value: "menu_deposit" },
+          { text: "🏦 Withdraw / ማውጫ", type: "callback", value: "menu_withdraw" }
+        ],
+        [
+          { text: "📞 Contact Support", type: "callback", value: "menu_support" }
+        ]
+      ]).map(row => 
+        row.map(btn => {
+          const btnVal = btn.value === 'appUrl' ? appUrl : btn.value;
+          if (btn.type === 'webapp') {
+            return { text: btn.text, web_app: { url: btnVal } };
+          } else if (btn.type === 'url') {
+            return { text: btn.text, url: btnVal };
+          } else {
+            return { text: btn.text, callback_data: btnVal };
+          }
+        })
+      );
 
       await bot.sendMessage(chatId, greetingMsg, {
         parse_mode: "Markdown",
         reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "🎮 Play Game Hub 🚀",
-                web_app: { url: appUrl }
-              }
-            ],
-            [
-              { text: "💸 Deposit / ማስገቢያ", callback_data: "menu_deposit" },
-              { text: "🏦 Withdraw / ማውጫ", callback_data: "menu_withdraw" }
-            ],
-            [
-              { text: "📞 Contact Support", callback_data: "menu_support" }
-            ]
-          ]
+          inline_keyboard: welcomeButtonsRows
         }
       });
 
@@ -1885,6 +2599,804 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       await bot.answerCallbackQuery(query.id);
       const composer = { step: 'choose_target' as const };
       await renderBroadcastDashboard(bot, chatId, userId, composer);
+      return;
+    }
+
+    if (data === "control_edit") {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      sendEditPanelMenu(chatId, messageId);
+      return;
+    }
+
+    if (data === "edit_section_deposit") {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      const text = "📥 <b>Deposit Flow Prompts</b>\nSelect which prompt or instruction you want to edit:";
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "💰 Start Message", callback_data: "edit_key_deposit_start_msg" }],
+          [{ text: "📞 Support Username/Text", callback_data: "edit_key_support_text" }],
+          [{ text: "✅ Success Message", callback_data: "edit_key_deposit_success_msg" }],
+          [{ text: "🎉 Approved Message", callback_data: "edit_key_deposit_approved_msg" }],
+          [{ text: "❌ Declined Message", callback_data: "edit_key_deposit_declined_msg" }],
+          [{ text: "🔙 Back", callback_data: "control_edit" }]
+        ]
+      };
+      if (messageId) {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard });
+      }
+      return;
+    }
+
+    if (data === "edit_section_withdrawal") {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      const text = "📤 <b>Withdrawal Flow Prompts</b>\nSelect which prompt or notification you want to edit:";
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "💰 Start Message", callback_data: "edit_key_withdraw_start_msg" }],
+          [{ text: "📱 Telebirr Phone Prompt", callback_data: "edit_key_withdraw_telebirr_prompt" }],
+          [{ text: "🏦 Other Bank Account Prompt", callback_data: "edit_key_withdraw_other_bank_prompt" }],
+          [{ text: "✅ Success Message", callback_data: "edit_key_withdraw_success_msg" }],
+          [{ text: "🎉 Approved Message", callback_data: "edit_key_withdraw_approved_msg" }],
+          [{ text: "❌ Declined Message", callback_data: "edit_key_withdraw_declined_msg" }],
+          [{ text: "🔙 Back", callback_data: "control_edit" }]
+        ]
+      };
+      if (messageId) {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard });
+      }
+      return;
+    }
+
+    if (data === "edit_section_banks") {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      const text = "🏦 <b>Bank Accounts Detail</b>\nSelect which bank's account details/display name you want to edit:";
+      const bk = promptsConfig.banks;
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: bk["Telebirr"]?.name || "📱 Telebirr", callback_data: "edit_bank_Telebirr" }],
+          [{ text: bk["CBE"]?.name || "🏦 CBE", callback_data: "edit_bank_CBE" }],
+          [{ text: bk["Abyssinia"]?.name || "🏦 Abyssinia Bank", callback_data: "edit_bank_Abyssinia" }],
+          [{ text: bk["Dashen"]?.name || "🏦 Dashen Bank", callback_data: "edit_bank_Dashen" }],
+          [{ text: "🔙 Back", callback_data: "control_edit" }]
+        ]
+      };
+      if (messageId) {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard });
+      }
+      return;
+    }
+
+    if (data === "edit_section_welcome") {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      const text = "👋 <b>Welcome & Support Prompts</b>\nSelect which welcome or support prompt you want to edit:";
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "👋 Welcome Message (Registered)", callback_data: "edit_key_welcome_msg" }],
+          [{ text: "👋 Guest Welcome Message (Unregistered)", callback_data: "edit_key_welcome_guest_msg" }],
+          [{ text: "📞 Support Card Message", callback_data: "edit_key_support_card_msg" }],
+          [{ text: "🔙 Back", callback_data: "control_edit" }]
+        ]
+      };
+      if (messageId) {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard });
+      }
+      return;
+    }
+
+    if (data === "edit_section_welcome_buttons") {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      const buttons = promptsConfig.welcome_buttons || [];
+      let text = "🔘 <b>Welcome Buttons Editor</b>\n\n" +
+        "These are the buttons shown below your Welcome Message for players:\n\n";
+      
+      const inlineKeyboard: any[] = [];
+      
+      if (buttons.length === 0) {
+        text += "<i>No welcome buttons configured currently. Players won't see any buttons.</i>";
+      } else {
+        buttons.forEach((row, rIndex) => {
+          const rowButtons: any[] = [];
+          row.forEach((btn, cIndex) => {
+            text += `• Row ${rIndex + 1}, Col ${cIndex + 1}: <b>"${btn.text}"</b> (Type: <code>${btn.type}</code>)\n`;
+            rowButtons.push({
+              text: `✏️ Row ${rIndex + 1} Col ${cIndex + 1}: ${btn.text}`,
+              callback_data: `edit_wbtn_click_${rIndex}_${cIndex}`
+            });
+          });
+          inlineKeyboard.push(rowButtons);
+        });
+      }
+      
+      inlineKeyboard.push([{ text: "➕ Add New Button", callback_data: "edit_wbtn_add" }]);
+      inlineKeyboard.push([{ text: "🔙 Back", callback_data: "control_edit" }]);
+      
+      if (messageId) {
+        await bot.editMessageText(text, {
+          chat_id: chatId,
+          message_id: messageId,
+          parse_mode: "HTML",
+          reply_markup: { inline_keyboard: inlineKeyboard }
+        });
+      }
+      return;
+    }
+
+    if (data.startsWith("edit_wbtn_click_")) {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      const parts = data.replace("edit_wbtn_click_", "").split("_");
+      const rIndex = parseInt(parts[0], 10);
+      const cIndex = parseInt(parts[1], 10);
+      
+      const btn = promptsConfig.welcome_buttons?.[rIndex]?.[cIndex];
+      if (!btn) {
+        return bot.sendMessage(chatId, "❌ Button not found.");
+      }
+      
+      const text = `🔘 <b>Editing Welcome Button</b>\n\n` +
+        `• <b>Label:</b> <code>${btn.text}</code>\n` +
+        `• <b>Type:</b> <code>${btn.type}</code>\n` +
+        `• <b>Target Value:</b> <code>${btn.value}</code>\n\n` +
+        `Select an action:`;
+      
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "✏️ Edit Button Label", callback_data: `edit_wbtn_label_${rIndex}_${cIndex}` }],
+          [{ text: "🔧 Edit Button Type & Destination", callback_data: `edit_wbtn_dest_${rIndex}_${cIndex}` }],
+          [{ text: "❌ Delete Button", callback_data: `edit_wbtn_del_${rIndex}_${cIndex}` }],
+          [{ text: "🔙 Back to Buttons", callback_data: "edit_section_welcome_buttons" }]
+        ]
+      };
+      
+      if (messageId) {
+        await bot.editMessageText(text, {
+          chat_id: chatId,
+          message_id: messageId,
+          parse_mode: "HTML",
+          reply_markup: keyboard
+        });
+      }
+      return;
+    }
+
+    if (data.startsWith("edit_wbtn_label_")) {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      const parts = data.replace("edit_wbtn_label_", "").split("_");
+      const rIndex = parts[0];
+      const cIndex = parts[1];
+      
+      userStates.set(userId, {
+        step: 'awaiting_wbtn_label_change',
+        row: parseInt(rIndex, 10),
+        col: parseInt(cIndex, 10)
+      });
+      
+      await bot.sendMessage(chatId, `✍️ <b>Enter new label/text for the button:</b>\n\nType the text and send it directly.`, { parse_mode: "HTML" });
+      return;
+    }
+
+    if (data.startsWith("edit_wbtn_dest_")) {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      const parts = data.replace("edit_wbtn_dest_", "").split("_");
+      const rIndex = parts[0];
+      const cIndex = parts[1];
+      
+      const text = `🔧 <b>Select Button Type:</b>\n\n` +
+        `• <b>Play WebApp:</b> Launches your gaming app.\n` +
+        `• <b>Callback action:</b> Triggers built-in flows (e.g. <code>menu_deposit</code>, <code>menu_withdraw</code>, <code>menu_support</code>).\n` +
+        `• <b>Custom URL:</b> Redirects player to any custom link or channel.`;
+      
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "🎮 Play WebApp Game", callback_data: `set_wbtn_type_${rIndex}_${cIndex}_webapp` }],
+          [{ text: "💳 Callback Deposit Flow", callback_data: `set_wbtn_type_${rIndex}_${cIndex}_cb_dep` }],
+          [{ text: "🏦 Callback Withdraw Flow", callback_data: `set_wbtn_type_${rIndex}_${cIndex}_cb_wd` }],
+          [{ text: "📞 Callback Support Flow", callback_data: `set_wbtn_type_${rIndex}_${cIndex}_cb_sup` }],
+          [{ text: "🔗 Custom URL Link", callback_data: `set_wbtn_type_${rIndex}_${cIndex}_url` }],
+          [{ text: "🔙 Cancel", callback_data: `edit_wbtn_click_${rIndex}_${cIndex}` }]
+        ]
+      };
+      
+      if (messageId) {
+        await bot.editMessageText(text, {
+          chat_id: chatId,
+          message_id: messageId,
+          parse_mode: "HTML",
+          reply_markup: keyboard
+        });
+      }
+      return;
+    }
+
+    if (data.startsWith("set_wbtn_type_")) {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      const parts = data.replace("set_wbtn_type_", "").split("_");
+      const rIndex = parseInt(parts[0], 10);
+      const cIndex = parseInt(parts[1], 10);
+      const actionType = parts[2];
+      
+      if (!promptsConfig.welcome_buttons) promptsConfig.welcome_buttons = [];
+      const btn = promptsConfig.welcome_buttons?.[rIndex]?.[cIndex];
+      if (!btn) return;
+      
+      if (actionType === 'webapp') {
+        btn.type = 'webapp';
+        btn.value = 'appUrl';
+        savePromptsConfig(promptsConfig);
+        await bot.sendMessage(chatId, `✅ Welcome button updated to launch WebApp Game!`);
+        await bot.sendMessage(chatId, `🔘 <b>Welcome Button Editor</b>\nUpdated!`, {
+          reply_markup: {
+            inline_keyboard: [[{ text: "🔙 Back to Buttons", callback_data: "edit_section_welcome_buttons" }]]
+          }
+        });
+      } else if (actionType === 'cb_dep') {
+        btn.type = 'callback';
+        btn.value = 'menu_deposit';
+        savePromptsConfig(promptsConfig);
+        await bot.sendMessage(chatId, `✅ Welcome button updated to trigger Deposit Flow!`);
+        await bot.sendMessage(chatId, `🔘 <b>Welcome Button Editor</b>\nUpdated!`, {
+          reply_markup: {
+            inline_keyboard: [[{ text: "🔙 Back to Buttons", callback_data: "edit_section_welcome_buttons" }]]
+          }
+        });
+      } else if (actionType === 'cb_wd') {
+        btn.type = 'callback';
+        btn.value = 'menu_withdraw';
+        savePromptsConfig(promptsConfig);
+        await bot.sendMessage(chatId, `✅ Welcome button updated to trigger Withdraw Flow!`);
+        await bot.sendMessage(chatId, `🔘 <b>Welcome Button Editor</b>\nUpdated!`, {
+          reply_markup: {
+            inline_keyboard: [[{ text: "🔙 Back to Buttons", callback_data: "edit_section_welcome_buttons" }]]
+          }
+        });
+      } else if (actionType === 'cb_sup') {
+        btn.type = 'callback';
+        btn.value = 'menu_support';
+        savePromptsConfig(promptsConfig);
+        await bot.sendMessage(chatId, `✅ Welcome button updated to trigger Support Flow!`);
+        await bot.sendMessage(chatId, `🔘 <b>Welcome Button Editor</b>\nUpdated!`, {
+          reply_markup: {
+            inline_keyboard: [[{ text: "🔙 Back to Buttons", callback_data: "edit_section_welcome_buttons" }]]
+          }
+        });
+      } else if (actionType === 'url') {
+        userStates.set(userId, {
+          step: 'awaiting_wbtn_url_change',
+          row: rIndex,
+          col: cIndex
+        });
+        await bot.sendMessage(chatId, `✍️ <b>Please send the destination URL link:</b>\n\nExample: <code>https://t.me/EthiopiaPlayChannel</code>`, { parse_mode: "HTML" });
+      }
+      return;
+    }
+
+    if (data.startsWith("edit_wbtn_del_")) {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      const parts = data.replace("edit_wbtn_del_", "").split("_");
+      const rIndex = parseInt(parts[0], 10);
+      const cIndex = parseInt(parts[1], 10);
+      
+      if (promptsConfig.welcome_buttons?.[rIndex]) {
+        promptsConfig.welcome_buttons[rIndex].splice(cIndex, 1);
+        if (promptsConfig.welcome_buttons[rIndex].length === 0) {
+          promptsConfig.welcome_buttons.splice(rIndex, 1);
+        }
+        savePromptsConfig(promptsConfig);
+        await bot.sendMessage(chatId, "✅ Welcome button deleted successfully!");
+      }
+      
+      const text = "👋 <b>Welcome Buttons Main Editor</b>";
+      await bot.sendMessage(chatId, text, {
+        reply_markup: {
+          inline_keyboard: [[{ text: "🔙 Back to Buttons Panel", callback_data: "edit_section_welcome_buttons" }]]
+        }
+      });
+      return;
+    }
+
+    if (data === "edit_wbtn_add") {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      userStates.set(userId, {
+        step: 'awaiting_wbtn_add_label'
+      });
+      
+      await bot.sendMessage(chatId, `✍️ <b>Enter label/text for the new button:</b>\n\nType the text (e.g. <code>🎁 Free Bonus</code>) and send it directly.`, { parse_mode: "HTML" });
+      return;
+    }
+
+    if (data.startsWith("add_wbtn_type_")) {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      const type = data.replace("add_wbtn_type_", "");
+      const state = userStates.get(userId);
+      const label = state?.new_label || "New Button";
+      
+      if (!promptsConfig.welcome_buttons) promptsConfig.welcome_buttons = [];
+      
+      if (type === 'webapp') {
+        promptsConfig.welcome_buttons.push([{ text: label, type: 'webapp', value: 'appUrl' }]);
+        savePromptsConfig(promptsConfig);
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, `✅ Successfully added button "${label}"!`);
+        await bot.sendMessage(chatId, "🔘 Welcome Buttons Menu", {
+          reply_markup: {
+            inline_keyboard: [[{ text: "🔙 Back to Buttons", callback_data: "edit_section_welcome_buttons" }]]
+          }
+        });
+      } else if (type === 'cb_dep') {
+        promptsConfig.welcome_buttons.push([{ text: label, type: 'callback', value: 'menu_deposit' }]);
+        savePromptsConfig(promptsConfig);
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, `✅ Successfully added button "${label}"!`);
+        await bot.sendMessage(chatId, "🔘 Welcome Buttons Menu", {
+          reply_markup: {
+            inline_keyboard: [[{ text: "🔙 Back to Buttons", callback_data: "edit_section_welcome_buttons" }]]
+          }
+        });
+      } else if (type === 'cb_wd') {
+        promptsConfig.welcome_buttons.push([{ text: label, type: 'callback', value: 'menu_withdraw' }]);
+        savePromptsConfig(promptsConfig);
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, `✅ Successfully added button "${label}"!`);
+        await bot.sendMessage(chatId, "🔘 Welcome Buttons Menu", {
+          reply_markup: {
+            inline_keyboard: [[{ text: "🔙 Back to Buttons", callback_data: "edit_section_welcome_buttons" }]]
+          }
+        });
+      } else if (type === 'cb_sup') {
+        promptsConfig.welcome_buttons.push([{ text: label, type: 'callback', value: 'menu_support' }]);
+        savePromptsConfig(promptsConfig);
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, `✅ Successfully added button "${label}"!`);
+        await bot.sendMessage(chatId, "🔘 Welcome Buttons Menu", {
+          reply_markup: {
+            inline_keyboard: [[{ text: "🔙 Back to Buttons", callback_data: "edit_section_welcome_buttons" }]]
+          }
+        });
+      } else if (type === 'url') {
+        userStates.set(userId, {
+          ...state,
+          step: 'awaiting_wbtn_add_url'
+        });
+        await bot.sendMessage(chatId, `✍️ <b>Please send the destination URL link:</b>\n\nExample: <code>https://t.me/EthiopiaPlayChannel</code>`, { parse_mode: "HTML" });
+      }
+      return;
+    }
+
+    if (data === "edit_section_custom_commands") {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      const cmds = promptsConfig.custom_commands || {};
+      let text = "✨ <b>Custom Commands Manager</b>\n\n" +
+        "You can define your own Telegram bot commands dynamically! These will appear in player suggestions and triggers custom texts, photos, or buttons.\n\n" +
+        "<b>Current Custom Commands:</b>\n";
+      
+      const inlineKeyboard: any[] = [];
+      const keys = Object.keys(cmds);
+      
+      if (keys.length === 0) {
+        text += "<i>No custom commands registered yet.</i>";
+      } else {
+        keys.forEach((cmd) => {
+          text += `• <b>/${cmd}</b> - <i>${cmds[cmd].description || 'No description'}</i>\n`;
+          inlineKeyboard.push([{
+            text: `🛠️ /${cmd}`,
+            callback_data: `ccmd_edit_${cmd}`
+          }]);
+        });
+      }
+      
+      inlineKeyboard.push([{ text: "➕ Create Dynamic Command", callback_data: "ccmd_create_start" }]);
+      inlineKeyboard.push([{ text: "🔙 Back", callback_data: "control_edit" }]);
+      
+      if (messageId) {
+        await bot.editMessageText(text, {
+          chat_id: chatId,
+          message_id: messageId,
+          parse_mode: "HTML",
+          reply_markup: { inline_keyboard: inlineKeyboard }
+        });
+      }
+      return;
+    }
+
+    if (data === "ccmd_create_start") {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      userStates.set(userId, {
+        step: 'awaiting_ccmd_name'
+      });
+      
+      await bot.sendMessage(chatId, `✍️ <b>Enter your new command name</b> (lowercase, no space, no slash):\n\nExample: <code>rules</code>`, { parse_mode: "HTML" });
+      return;
+    }
+
+    if (data.startsWith("ccmd_edit_")) {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      const cmdName = data.replace("ccmd_edit_", "");
+      await sendCustomCommandEditMenu(chatId, cmdName, messageId);
+      return;
+    }
+
+    if (data.startsWith("ccmd_val_")) {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      const clean = data.replace("ccmd_val_", "");
+      const parts = clean.split("_");
+      const cmdName = parts[0];
+      const action = parts.slice(1).join("_");
+      
+      if (action === "text" || action === "desc" || action === "photo") {
+        userStates.set(userId, {
+          step: 'awaiting_ccmd_val_change',
+          cmd_name: cmdName,
+          field: action
+        });
+        
+        const label = action === "text" ? "response message text" : (action === "desc" ? "menu helper description" : "photo File ID or direct image URL");
+        await bot.sendMessage(chatId, `✍️ <b>Please send the new ${label} for /${cmdName}:</b>`, { parse_mode: "HTML" });
+      } else if (action === "photo_clear") {
+        if (promptsConfig.custom_commands?.[cmdName]) {
+          promptsConfig.custom_commands[cmdName].photo = undefined;
+          savePromptsConfig(promptsConfig);
+          await bot.sendMessage(chatId, `✅ Cleared photo for /${cmdName}!`);
+          await sendCustomCommandEditMenu(chatId, cmdName);
+        }
+      } else if (action === "delete") {
+        if (promptsConfig.custom_commands) {
+          delete promptsConfig.custom_commands[cmdName];
+          savePromptsConfig(promptsConfig);
+          await bot.sendMessage(chatId, `✅ Deleted custom command /${cmdName}!`);
+          
+          try {
+            const systemCommands = [
+              { command: "start", description: "Launch the game hub and display menu" },
+              { command: "play", description: "Launch the Web App immediately" },
+              { command: "deposit", description: "Deposit ETB into your balance" },
+              { command: "withdraw", description: "Withdraw ETB from your balance" },
+              { command: "support", description: "Show contact support details" },
+              { command: "language", description: "Change bot language" },
+              { command: "cancel", description: "Cancel current operation or active flows" }
+            ];
+
+            const customCommandsList = Object.entries(promptsConfig.custom_commands || {}).map(([cmd, cfg]) => ({
+              command: cmd,
+              description: cfg.description || "Custom command"
+            }));
+
+            await bot.setMyCommands([...systemCommands, ...customCommandsList]);
+          } catch (err) {}
+        }
+        const text = "✨ <b>Custom Commands Main Panel</b>";
+        await bot.sendMessage(chatId, text, {
+          reply_markup: {
+            inline_keyboard: [[{ text: "🔙 Back to Commands Panel", callback_data: "edit_section_custom_commands" }]]
+          }
+        });
+      } else if (action === "buttons") {
+        await sendCustomCommandButtonsPanel(chatId, cmdName, messageId);
+      }
+      return;
+    }
+
+    if (data.startsWith("cc_btn_click_")) {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      const parts = data.replace("cc_btn_click_", "").split("_");
+      const cmdName = parts[0];
+      const rIndex = parseInt(parts[1], 10);
+      const cIndex = parseInt(parts[2], 10);
+      
+      const cmd = promptsConfig.custom_commands?.[cmdName];
+      const btn = cmd?.buttons?.[rIndex]?.[cIndex];
+      if (!btn) return;
+      
+      const text = `🔘 <b>Editing Custom Command Button</b>\n\n` +
+        `• <b>Command:</b> /${cmdName}\n` +
+        `• <b>Label:</b> <code>${btn.text}</code>\n` +
+        `• <b>Type:</b> <code>${btn.type}</code>\n` +
+        `• <b>Target Value:</b> <code>${btn.value}</code>\n\n` +
+        `Select an action:`;
+        
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "✏️ Edit Button Label", callback_data: `cc_btn_label_${cmdName}_${rIndex}_${cIndex}` }],
+          [{ text: "❌ Delete Button", callback_data: `cc_btn_del_${cmdName}_${rIndex}_${cIndex}` }],
+          [{ text: "🔙 Back to Buttons", callback_data: `ccmd_val_${cmdName}_buttons` }]
+        ]
+      };
+      
+      if (messageId) {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard });
+      }
+      return;
+    }
+
+    if (data.startsWith("cc_btn_label_")) {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      const parts = data.replace("cc_btn_label_", "").split("_");
+      const cmdName = parts[0];
+      const rIndex = parseInt(parts[1], 10);
+      const cIndex = parseInt(parts[2], 10);
+      
+      userStates.set(userId, {
+        step: 'awaiting_cc_btn_label_change',
+        cmd_name: cmdName,
+        row: rIndex,
+        col: cIndex
+      });
+      
+      await bot.sendMessage(chatId, `✍️ <b>Enter new label for this /${cmdName} button:</b>`, { parse_mode: "HTML" });
+      return;
+    }
+
+    if (data.startsWith("cc_btn_del_")) {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      const parts = data.replace("cc_btn_del_", "").split("_");
+      const cmdName = parts[0];
+      const rIndex = parseInt(parts[1], 10);
+      const cIndex = parseInt(parts[2], 10);
+      
+      const cmd = promptsConfig.custom_commands?.[cmdName];
+      if (cmd?.buttons?.[rIndex]) {
+        cmd.buttons[rIndex].splice(cIndex, 1);
+        if (cmd.buttons[rIndex].length === 0) {
+          cmd.buttons.splice(rIndex, 1);
+        }
+        savePromptsConfig(promptsConfig);
+        await bot.sendMessage(chatId, `✅ Button deleted successfully!`);
+      }
+      
+      await sendCustomCommandButtonsPanel(chatId, cmdName);
+      return;
+    }
+
+    if (data.startsWith("cc_btn_add_")) {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      const cmdName = data.replace("cc_btn_add_", "");
+      userStates.set(userId, {
+        step: 'awaiting_cc_btn_add_label',
+        cmd_name: cmdName
+      });
+      
+      await bot.sendMessage(chatId, `✍️ <b>Enter label/text for the new button on /${cmdName}:</b>\n\nType the text and send it directly.`, { parse_mode: "HTML" });
+      return;
+    }
+
+    if (data.startsWith("cc_add_type_")) {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      const parts = data.replace("cc_add_type_", "").split("_");
+      const cmdName = parts[0];
+      const type = parts.slice(1).join("_");
+      
+      const state = userStates.get(userId);
+      const label = state?.new_label || "New Button";
+      const cmd = promptsConfig.custom_commands?.[cmdName];
+      if (!cmd) return;
+      if (!cmd.buttons) cmd.buttons = [];
+      
+      if (type === 'webapp') {
+        cmd.buttons.push([{ text: label, type: 'webapp', value: 'appUrl' }]);
+        savePromptsConfig(promptsConfig);
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, `✅ Successfully added button "${label}"!`);
+        await sendCustomCommandButtonsPanel(chatId, cmdName);
+      } else if (type === 'cb_dep') {
+        cmd.buttons.push([{ text: label, type: 'callback', value: 'menu_deposit' }]);
+        savePromptsConfig(promptsConfig);
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, `✅ Successfully added button "${label}"!`);
+        await sendCustomCommandButtonsPanel(chatId, cmdName);
+      } else if (type === 'cb_wd') {
+        cmd.buttons.push([{ text: label, type: 'callback', value: 'menu_withdraw' }]);
+        savePromptsConfig(promptsConfig);
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, `✅ Successfully added button "${label}"!`);
+        await sendCustomCommandButtonsPanel(chatId, cmdName);
+      } else if (type === 'cb_sup') {
+        cmd.buttons.push([{ text: label, type: 'callback', value: 'menu_support' }]);
+        savePromptsConfig(promptsConfig);
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, `✅ Successfully added button "${label}"!`);
+        await sendCustomCommandButtonsPanel(chatId, cmdName);
+      } else if (type === 'url') {
+        userStates.set(userId, {
+          ...state,
+          step: 'awaiting_cc_btn_add_url'
+        });
+        await bot.sendMessage(chatId, `✍️ <b>Please send the destination URL link:</b>\n\nExample: <code>https://t.me/EthiopiaPlayChannel</code>`, { parse_mode: "HTML" });
+      }
+      return;
+    }
+
+    if (data.startsWith("edit_bank_")) {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      const bankId = data.replace("edit_bank_", "");
+      const bank = promptsConfig.banks[bankId] || { name: bankId, account: "", owner_name: "" };
+      const text = `🏦 <b>Bank Settings: ${bankId}</b>\n\n` +
+        `🏷️ <b>Display Name:</b> <code>${bank.name}</code>\n` +
+        `💳 <b>Account/Phone:</b> <code>${bank.account}</code>\n` +
+        `👤 <b>Owner Name:</b> <code>${bank.owner_name}</code>\n\n` +
+        `Select which property you want to edit:`;
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "🏷️ Edit Display Name", callback_data: `edit_bankval_${bankId}_name` }],
+          [{ text: "💳 Edit Account/Phone", callback_data: `edit_bankval_${bankId}_account` }],
+          [{ text: "👤 Edit Owner Name", callback_data: `edit_bankval_${bankId}_owner_name` }],
+          [{ text: "🔙 Back to Banks", callback_data: "edit_section_banks" }]
+        ]
+      };
+      if (messageId) {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard });
+      }
+      return;
+    }
+
+    if (data.startsWith("edit_key_")) {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      const key = data.replace("edit_key_", "") as keyof PromptsConfig;
+      const currentVal = promptsConfig[key] || "";
+      userStates.set(userId, {
+        step: 'edit_prompt_value',
+        editingKey: key
+      });
+
+      const section = key.startsWith("withdraw") ? "edit_section_withdrawal" : "edit_section_deposit";
+      const text = `✍️ <b>Editing Prompt Key:</b> <code>${key}</code>\n\n` +
+        `<b>Current Value:</b>\n` +
+        `<pre>${currentVal}</pre>\n\n` +
+        `<i>Please send the new text message in response to this message to update it. Markdown formatting is supported.</i>`;
+      
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "❌ Cancel", callback_data: section }]
+        ]
+      };
+
+      if (messageId) {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard });
+      }
+      return;
+    }
+
+    if (data.startsWith("edit_bankval_")) {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      const parts = data.replace("edit_bankval_", "").split("_");
+      const bankId = parts[0];
+      const prop = parts.slice(1).join("_"); // 'name' | 'account' | 'owner_name'
+      const bank = promptsConfig.banks[bankId] || { name: bankId, account: "", owner_name: "" };
+      const currentVal = (bank as any)[prop] || "";
+
+      userStates.set(userId, {
+        step: 'edit_prompt_value',
+        editingKey: `bank_${bankId}_${prop}`
+      });
+
+      const text = `✍️ <b>Editing ${bankId} Bank Property:</b> <code>${prop}</code>\n\n` +
+        `<b>Current Value:</b>\n` +
+        `<pre>${currentVal}</pre>\n\n` +
+        `<i>Please send the new value text message to update.</i>`;
+      
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "❌ Cancel", callback_data: `edit_bank_${bankId}` }]
+        ]
+      };
+
+      if (messageId) {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard });
+      }
       return;
     }
 
@@ -2928,12 +4440,13 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       });
 
       const amount = state.amount || 10;
-      const paymentInstructions = `ሚያጋጥማቹ የክፍያ ችግር:\n` +
-        `@wheelgamessupport\n` +
-        `@wheelgamesupport1 ላይ ፃፉልን።\n\n` +
-        `1. ከታች ባለው የ*${bank}* አካውንት *${amount.toLocaleString()} ብር* ያስገቡ\n` +
-        `    *Phone:* \`0931503559\`\n` +
-        `    *Name:* \`Tadese\`\n\n` +
+      const bankConfig = promptsConfig.banks[bank] || { name: bank, account: "0931503559", owner_name: "Tadese" };
+      const supportTxt = promptsConfig.support_text;
+
+      const paymentInstructions = `${supportTxt}\n\n` +
+        `1. ከታች ባለው የ*${bankConfig.name || bank}* አካውንት *${amount.toLocaleString()} ብር* ያስገቡ\n` +
+        `    *Account/Phone:* \`${bankConfig.account}\`\n` +
+        `    *Name:* \`${bankConfig.owner_name}\`\n\n` +
         `2. የከፈሉበትን አጭር የጹሁፍ መልዕክት(message) copy በማድረግ እዚ ላይ Past አድረገው ያስገቡና ይላኩት👇👇👇\n\n` +
         `_(Please copy and paste the SMS transaction receipt text as response)_`;
 
@@ -2960,9 +4473,9 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       bot.answerCallbackQuery(query.id);
 
       if (bank === "Telebirr") {
-        return bot.sendMessage(chatId, "📱 *እባክዎን ስልክ ቁጥርን ያስገቡ:*", { parse_mode: "Markdown" });
+        return bot.sendMessage(chatId, promptsConfig.withdraw_telebirr_prompt, { parse_mode: "Markdown" });
       } else {
-        return bot.sendMessage(chatId, "🏦 *እባክዎን አካውንት ቁጥርን ያስገቡ:*", { parse_mode: "Markdown" });
+        return bot.sendMessage(chatId, promptsConfig.withdraw_other_bank_prompt, { parse_mode: "Markdown" });
       }
     }
 
@@ -2997,7 +4510,9 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
         const refCode = "DEP_" + generateRef(10);
 
         // Send confirmation to User
-        const successMsg = `✅ *Your deposit of ${request.amount.toLocaleString()} ETB is confirmed.*\n🧾 *Ref:* \`${refCode}\``;
+        const successMsg = promptsConfig.deposit_approved_msg
+          .replace(/{amount}/g, request.amount.toLocaleString())
+          .replace(/{ref}/g, refCode);
         await bot.sendMessage(request.chatId, successMsg, { parse_mode: "Markdown" });
 
         // Update Client App UI Instantly via socket
@@ -3046,7 +4561,8 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
 
       try {
         // Send decline notification to User
-        const declineMsg = `❌ *Your deposit of ${request.amount.toLocaleString()} ETB is Declined.*`;
+        const declineMsg = promptsConfig.deposit_declined_msg
+          .replace(/{amount}/g, request.amount.toLocaleString());
         await bot.sendMessage(request.chatId, declineMsg, { parse_mode: "Markdown" });
 
         // Delete from pending store
@@ -3103,7 +4619,9 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
         const refCode = "WD_" + generateRef(10);
 
         // Send confirmation to User
-        const successMsg = `✅ *Your withdrawal of ${request.amount.toLocaleString()} ETB is confirmed.*\n🧾 *Ref:* \`${refCode}\``;
+        const successMsg = promptsConfig.withdraw_approved_msg
+          .replace(/{amount}/g, request.amount.toLocaleString())
+          .replace(/{ref}/g, refCode);
         await bot.sendMessage(request.chatId, successMsg, { parse_mode: "Markdown" });
 
         // Delete from pending store
@@ -3163,11 +4681,9 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
         });
 
         // Send detailed Decline & Refund message to user
-        const declineMsg = `❌ *Withdrawal Declined*\n\n` +
-          `Your withdrawal of *${request.amount.toLocaleString()} Birr* was declined and refunded.\n\n` +
-          `💳 *Current Balance:* *${refundedBalance.toLocaleString()} Birr*\n\n` +
-          `Please contact support if you believe this was an error.`;
-
+        const declineMsg = promptsConfig.withdraw_declined_msg
+          .replace(/{amount}/g, request.amount.toLocaleString())
+          .replace(/{balance}/g, refundedBalance.toLocaleString());
         await bot.sendMessage(request.chatId, declineMsg, { parse_mode: "Markdown" });
 
         // Update Client App UI instantly via socket
@@ -3209,4 +4725,26 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
 
 export function getBotUsername() {
   return botInfo?.username || null;
+}
+
+export async function triggerBotFlow(userId: string, flowType: 'deposit' | 'withdraw'): Promise<boolean> {
+  logBot(`triggerBotFlow called for userId=${userId}, flowType=${flowType}`);
+  const chatId = parseInt(userId, 10);
+  if (isNaN(chatId)) {
+    logBot(`Invalid userId for triggerBotFlow: ${userId}`);
+    return false;
+  }
+
+  if (flowType === 'deposit') {
+    if (startDepositFlowRef) {
+      startDepositFlowRef(chatId, userId);
+      return true;
+    }
+  } else if (flowType === 'withdraw') {
+    if (startWithdrawalFlowRef) {
+      await startWithdrawalFlowRef(chatId, userId);
+      return true;
+    }
+  }
+  return false;
 }

@@ -4,13 +4,14 @@ import { createServer as createViteServer } from "vite";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import { initGameEngine } from "./src/server/GameEngine.js";
-import { initTelegramBot, getBotUsername, getBotLogs } from "./src/server/telegramBot.js";
+import { initTelegramBot, getBotUsername, getBotLogs, triggerBotFlow } from "./src/server/telegramBot.js";
 import dotenv from "dotenv";
 
 dotenv.config();
 
 async function startServer() {
   const app = express();
+  app.use(express.json());
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
   
   const httpServer = createServer(app);
@@ -38,6 +39,23 @@ async function startServer() {
 
   app.get("/api/bot-logs", (req, res) => {
     res.json({ logs: getBotLogs() });
+  });
+
+  app.post("/api/trigger-bot-flow", async (req, res) => {
+    const { userId, flowType } = req.body;
+    if (!userId || !flowType) {
+      return res.status(400).json({ error: "Missing userId or flowType" });
+    }
+    try {
+      const success = await triggerBotFlow(userId.toString(), flowType);
+      if (success) {
+        res.json({ success: true });
+      } else {
+        res.status(500).json({ error: "Failed to trigger bot flow. Check if bot is active." });
+      }
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // Vite middleware for development

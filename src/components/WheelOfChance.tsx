@@ -5,7 +5,7 @@ import { ArrowLeft, Coins, Lock, Check, Trophy, Sparkles, Zap, RefreshCw, Volume
 interface WheelOfChanceProps {
   balance: number;
   setBalance: React.Dispatch<React.SetStateAction<number>>;
-  setMockTransactions: React.Dispatch<React.SetStateAction<any[]>>;
+  setTransactions: React.Dispatch<React.SetStateAction<any[]>>;
   isDarkMode: boolean;
   soundTicks: boolean;
   onBack?: () => void;
@@ -18,7 +18,7 @@ type GamePhase = 'lobby' | 'countdown' | 'spinning' | 'announcing' | 'complete';
 export function WheelOfChance({
   balance,
   setBalance,
-  setMockTransactions,
+  setTransactions,
   isDarkMode,
   soundTicks: parentSoundTicks,
   onBack,
@@ -97,7 +97,7 @@ export function WheelOfChance({
     return premiumColors[(num - 1) % premiumColors.length];
   };
 
-  const peerNames = ['Dawit', 'Helen', 'Yohannes', 'Abiel', 'Kidus', 'Selam', 'Biniam', 'Tsion', 'Marta', 'Elias', 'Hana', 'Almaz', 'Daniel', 'Eskinder', 'Aster', 'Zenebe', 'Yared', 'Aster', 'Hiwot', 'Mikael'];
+
 
   useEffect(() => {
     isMounted.current = true;
@@ -127,59 +127,11 @@ export function WheelOfChance({
     setJustDrawnWinner(null);
     setStatusFilament('• Room open. Reserve your ticket to start...');
 
-    // Preclaim 40% - 60% of the slot numbers
-    const initialClaims: { [key: number]: { isSelf: boolean; username: string } } = {};
-    const countToPreclaim = Math.floor(maxSlots * 0.4) + Math.floor(Math.random() * 3);
-    const available = Array.from({ length: maxSlots }, (_, i) => i + 1);
-
-    for (let i = 0; i < countToPreclaim; i++) {
-      if (available.length === 0) break;
-      const randIndex = Math.floor(Math.random() * available.length);
-      const slotNum = available.splice(randIndex, 1)[0];
-      const name = peerNames[Math.floor(Math.random() * peerNames.length)];
-      initialClaims[slotNum] = { isSelf: false, username: name };
-    }
-
-    setClaimedSlots(initialClaims);
+    setClaimedSlots({});
     setActiveSectors(Array.from({ length: maxSlots }, (_, i) => i + 1));
   };
 
-  // Peer claim simulator
-  useEffect(() => {
-    if (phase !== 'lobby') return;
 
-    const interval = setInterval(() => {
-      const claimedCount = Object.keys(claimedSlots).length;
-      if (claimedCount >= maxSlots) {
-        clearInterval(interval);
-        return;
-      }
-
-      const available = Array.from({ length: maxSlots }, (_, i) => i + 1)
-        .filter(n => !claimedSlots[n]);
-
-      if (available.length > 0 && Math.random() < 0.5) {
-        const slotToClaim = available[Math.floor(Math.random() * available.length)];
-        const name = peerNames[Math.floor(Math.random() * peerNames.length)];
-
-        setClaimedSlots(prev => {
-          const next = { ...prev, [slotToClaim]: { isSelf: false, username: name } };
-          const nextCount = Object.keys(next).length;
-
-          if (nextCount === maxSlots) {
-            startCountdown();
-          } else {
-            setStatusFilament(`• ${nextCount}/${maxSlots} slots secured. Waiting for other players...`);
-          }
-          return next;
-        });
-
-        playBeep(450, 0.08, 'triangle');
-      }
-    }, 2000);
-
-    return () => clearInterval(interval);
-  }, [claimedSlots, phase, maxSlots]);
 
   const startCountdown = () => {
     setPhase('countdown');
@@ -214,7 +166,7 @@ export function WheelOfChance({
           socket?.emit('logTransaction', { userId, amount: entryFee, type: 'refund', description: `Released Slot #${num} (${activeRoom} Room)`, newBalance });
           return newBalance;
         });
-        setMockTransactions(prev => [
+        setTransactions(prev => [
           { id: Date.now(), type: 'bet', desc: `Released Slot #${num} (${activeRoom} Room)`, amount: entryFee, date: 'Just now', positive: true },
           ...prev
         ]);
@@ -243,7 +195,7 @@ export function WheelOfChance({
       socket?.emit('logTransaction', { userId, amount: -entryFee, type: 'bet', description: `Secured Slot #${num} (P2P ${activeRoom} Room)`, newBalance });
       return newBalance;
     });
-    setMockTransactions(prev => [
+    setTransactions(prev => [
       { id: Date.now(), type: 'bet', desc: `Secured Slot #${num} (P2P ${activeRoom} Room)`, amount: -entryFee, date: 'Just now', positive: false },
       ...prev
     ]);
@@ -279,17 +231,21 @@ export function WheelOfChance({
     const randIndex = Math.floor(Math.random() * currentSectors.length);
     const winningSectorVal = currentSectors[randIndex];
 
-    // Align rotation so pointer (top, -90 deg, or 270 deg) lands exactly on winningSectorVal
+    // Align rotation so pointer (top, -90 deg, or 270 deg) lands on winningSectorVal
     const totalSectors = currentSectors.length;
     const sliceAngle = 360 / totalSectors;
     const sectorIndex = currentSectors.indexOf(winningSectorVal);
 
-    const centerOfSlice = (sectorIndex + 0.5) * sliceAngle;
-    const targetRotation = 360 * 80 + 270 - centerOfSlice;
+    // Randomize the landing position inside the sector (excluding the 18% boundaries on both edges to avoid landing on a separation line)
+    const randomFraction = 0.18 + Math.random() * 0.64;
+    const offsetOfSlice = (sectorIndex + randomFraction) * sliceAngle;
+    
+    // Use 8 full rotations instead of 80 to allow a smooth, gradual ease-out deceleration
+    const targetRotation = 360 * 8 + 270 - offsetOfSlice;
 
     const startRotation = rotationRef.current;
     const distance = targetRotation - startRotation;
-    const duration = 30000; // 30 seconds spin duration
+    const duration = 18000; // 18 seconds spin duration for incredible suspense
     const startTime = performance.now();
 
     let lastTickAngle = 0;
@@ -299,8 +255,8 @@ export function WheelOfChance({
       const elapsed = now - startTime;
       const progress = Math.min(elapsed / duration, 1);
 
-      // Super slow suspenseful ease-out
-      const ease = Math.pow(progress, 0.25) * (1 - Math.pow(1 - progress, 250));
+      // Super slow suspenseful ease-out curve that starts fast but slows down to a crawl at the end
+      const ease = Math.pow(progress, 0.22) * (1 - Math.pow(1 - progress, 180));
       rotationRef.current = startRotation + distance * ease;
 
       // Click sound tick
@@ -348,7 +304,7 @@ export function WheelOfChance({
             socket?.emit('logTransaction', { userId, amount: payoutAmount, type: 'win', description: `🏆 P2P ${tierName} Grand Victory (#${winningSectorVal})`, newBalance });
             return newBalance;
           });
-          setMockTransactions(prev => [
+          setTransactions(prev => [
             { id: Date.now(), type: 'reward', desc: `🏆 P2P ${tierName} Grand Victory (#${winningSectorVal})`, amount: payoutAmount, date: 'Just now', positive: true },
             ...prev
           ]);
@@ -604,6 +560,18 @@ export function WheelOfChance({
         </span>
       </div>
 
+      {/* Manual Start Button */}
+      {phase === 'lobby' && Object.keys(claimedSlots).length > 0 && (
+        <div className="px-4 mb-2">
+          <button 
+            onClick={startCountdown}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-3 rounded-xl shadow-md uppercase tracking-wider text-xs transition-colors"
+          >
+            Force Start Wheel Now
+          </button>
+        </div>
+      )}
+
       {/* 4. Good Luck Countdown Overlay */}
       <AnimatePresence>
         {phase === 'countdown' && (
@@ -622,7 +590,7 @@ export function WheelOfChance({
               <div className="text-6xl animate-bounce">✨</div>
               <h2 className="text-3xl font-black tracking-wider text-yellow-400 font-sans uppercase">Good Luck!</h2>
               <p className="text-zinc-400 text-xs max-w-xs mx-auto leading-relaxed font-sans">
-                All ticket slots are secured. The automated Cascading Eviction draw is about to commence!
+                The automated Cascading Eviction draw is about to commence!
               </p>
               
               <div className="relative flex items-center justify-center my-6">

@@ -7,7 +7,7 @@ interface JackpotArenaProps {
   balance: number;
   setBalance: React.Dispatch<React.SetStateAction<number>>;
   showNotification: (message: string, type: 'success' | 'error' | 'info') => void;
-  setMockTransactions: React.Dispatch<React.SetStateAction<any[]>>;
+  setTransactions: React.Dispatch<React.SetStateAction<any[]>>;
   isDarkMode: boolean;
   soundTicks: boolean;
   onTheaterModeChange?: (active: boolean) => void;
@@ -26,7 +26,7 @@ export function JackpotArena({
   balance,
   setBalance,
   showNotification,
-  setMockTransactions,
+  setTransactions,
   isDarkMode,
   soundTicks,
   onTheaterModeChange,
@@ -138,26 +138,7 @@ export function JackpotArena({
   }, [tier]);
 
   const resetLobby = () => {
-    const initialFilledCount = Math.floor(currentConfig.slots * 0.65);
-    const grid: Record<number, Participant> = {};
-    const names = [
-      'Dawit', 'Selam', 'Almaz', 'Elias', 'Hana', 'Mulu', 'Yonas', 'Bekele', 'Aster', 'Zenebe',
-      'Tadesse', 'Lensa', 'Abdi', 'Tirunesh', 'Haile', 'Kenenisa', 'Derartu', 'Feyisa', 'Sileshi'
-    ];
-    
-    // Shuffle indices
-    const indices = Array.from({ length: currentConfig.slots }, (_, i) => i + 1).sort(() => Math.random() - 0.5);
-
-    for (let i = 0; i < initialFilledCount; i++) {
-      const spot = indices[i];
-      const randomName = names[Math.floor(Math.random() * names.length)];
-      grid[spot] = {
-        username: randomName,
-        isSelf: false
-      };
-    }
-
-    setTargetGrid(grid);
+    setTargetGrid({});
     setGamePhase('lobby');
     setDrawNumber(1);
     setWinners({});
@@ -167,54 +148,6 @@ export function JackpotArena({
     setReelTen('0');
     setReelOne('0');
   };
-
-  // Simulated peer buy-in stream
-  useEffect(() => {
-    if (gamePhase !== 'lobby') return;
-
-    const currentCount = Object.keys(activeGrid).length;
-    if (currentCount >= currentConfig.slots) {
-      triggerGlobalFreeze();
-      return;
-    }
-
-    const interval = setInterval(() => {
-      const openSpots: number[] = [];
-      for (let i = 1; i <= currentConfig.slots; i++) {
-        if (!activeGrid[i]) openSpots.push(i);
-      }
-
-      if (openSpots.length === 0) {
-        clearInterval(interval);
-        triggerGlobalFreeze();
-        return;
-      }
-
-      const randomSpot = openSpots[Math.floor(Math.random() * openSpots.length)];
-      const names = [
-        'Dawit', 'Selam', 'Almaz', 'Elias', 'Hana', 'Mulu', 'Yonas', 'Bekele', 'Aster', 'Zenebe',
-        'Tadesse', 'Lensa', 'Abdi', 'Tirunesh', 'Haile', 'Kenenisa', 'Derartu', 'Feyisa', 'Sileshi',
-        'Tegene', 'Kebebush', 'Mesfin', 'Tigist', 'Sintayehu', 'Helen', 'Ruth', 'Kalkidan', 'Abraham'
-      ];
-      const randomName = names[Math.floor(Math.random() * names.length)];
-
-      setTargetGrid(prev => ({
-        ...prev,
-        [randomSpot]: {
-          username: randomName,
-          isSelf: false
-        }
-      }));
-
-      // If that filled the last spot, stop interval immediately
-      if (Object.keys(activeGrid).length + 1 >= currentConfig.slots) {
-        clearInterval(interval);
-        triggerGlobalFreeze();
-      }
-    }, Math.floor(Math.random() * 2000) + 1000);
-
-    return () => clearInterval(interval);
-  }, [activeGrid, gamePhase, currentConfig.slots]);
 
   const triggerGlobalFreeze = () => {
     setGamePhase('freeze');
@@ -388,7 +321,7 @@ export function JackpotArena({
         socket?.emit('logTransaction', { userId, amount: prize, type: 'win', description: `🏆 Jackpot ${drawIndex}st Place Win!`, newBalance });
         return newBalance;
       });
-      setMockTransactions(prev => [
+      setTransactions(prev => [
         { id: Date.now(), type: 'win', desc: `🏆 Jackpot ${drawIndex}st Place Win!`, amount: prize, date: 'Just now', positive: true },
         ...prev
       ]);
@@ -457,7 +390,7 @@ export function JackpotArena({
       socket?.emit('logTransaction', { userId, amount: -currentConfig.entry, type: 'bet', description: `Secured Spot #${num} in Jackpot`, newBalance });
       return newBalance;
     });
-    setMockTransactions(prev => [
+    setTransactions(prev => [
       { id: Date.now(), type: 'bet', desc: `Secured Spot #${num} in Jackpot`, amount: -currentConfig.entry, date: 'Just now', positive: false },
       ...prev
     ]);
@@ -551,16 +484,13 @@ export function JackpotArena({
               exit={{ opacity: 0 }}
               className="flex flex-col items-center justify-center py-6 shrink-0 z-20 text-center"
             >
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-500 animate-pulse mb-3">
-                <Zap className="w-6 h-6 text-amber-500 animate-bounce" />
+              <div className="flex flex-col items-center justify-center mb-3">
+                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 border border-amber-500/30 text-amber-500 rounded-full text-xs font-black uppercase tracking-wider animate-pulse">
+                  <Zap className="w-3.5 h-3.5 fill-amber-500/20 text-amber-500 animate-bounce" />
+                  <span>Mini-VIP</span>
+                </div>
               </div>
-              <span className="text-sm font-black uppercase text-amber-500 tracking-widest animate-pulse">
-                LIGHTNING BLITZ CURRENTLY ACTIVE
-              </span>
-              <span className="text-[10px] text-zinc-400 font-bold block mt-1">
-                Jumping coordinates at lightspeed...
-              </span>
-              <div className="mt-4 text-xs font-bold text-amber-400/80 bg-amber-500/5 border border-amber-500/10 px-4 py-1.5 rounded-full uppercase tracking-wider animate-pulse">
+              <div className="mt-2 text-xs font-bold text-amber-400/80 bg-amber-500/5 border border-amber-500/10 px-4 py-1.5 rounded-full uppercase tracking-wider animate-pulse">
                 Rolling for {drawNumber === 1 ? '1ST' : drawNumber === 2 ? '2ND' : '3RD'} Place
               </div>
             </motion.div>
@@ -568,13 +498,15 @@ export function JackpotArena({
         )}
       </AnimatePresence>
 
-      {/* Main Status Bar (Hidden during Odometer phase to maximize tension) */}
-      {!isTheaterActive && gamePhase === 'freeze' && (
-        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-2.5 rounded-xl mb-4 text-center shrink-0 shadow-xs flex items-center justify-center gap-2">
-          <div className="text-red-500 text-xs font-black flex items-center gap-1.5 uppercase tracking-wider animate-bounce">
-            <AlertTriangle className="w-3.5 h-3.5 text-red-500" />
-            <span>ALL SLOTS ACQUIRED! Drawing starts in {freezeCountdown}s</span>
-          </div>
+      {/* Manual Start Button for lobby without mock peers */}
+      {!isTheaterActive && gamePhase === 'lobby' && Object.keys(activeGrid).length > 0 && (
+        <div className="mb-4">
+          <button 
+            onClick={triggerGlobalFreeze}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-3 rounded-xl shadow-md uppercase tracking-wider text-xs transition-colors"
+          >
+            Force Start Draw Now
+          </button>
         </div>
       )}
 
@@ -750,12 +682,8 @@ export function JackpotArena({
             <div className="w-14 h-14 bg-red-100 dark:bg-red-950/40 rounded-full flex items-center justify-center mx-auto mb-3">
               <Lock className="w-7 h-7 text-red-500 animate-pulse" />
             </div>
-            <h2 className="text-base font-black text-gray-900 dark:text-white uppercase tracking-wider">Good Luck!</h2>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 mb-4">All Matrix Spots Are Locked</p>
+            <h2 className="text-base font-black text-gray-900 dark:text-white uppercase tracking-wider mb-4">Good Luck!</h2>
             <div className="text-4xl font-mono font-black text-red-500 animate-pulse">{freezeCountdown}</div>
-            <span className="text-[10px] font-semibold text-gray-400 block mt-2">
-              Neon Lightning Blitz and Odometer drawing starting...
-            </span>
           </motion.div>
         </div>
       )}

@@ -4,7 +4,7 @@ import { RoomState, Side } from './types';
 import { Wheel } from './components/Wheel';
 import { JackpotArena } from './components/JackpotArena';
 import { WheelOfChance } from './components/WheelOfChance';
-import { Users, Clock, History, AlertCircle, Coins, Moon, Sun, Settings, X, HelpCircle, Search, Trophy, Gamepad2, TrendingUp, Wallet, User, Plus, ArrowUpRight, ArrowDownLeft, Copy, Check, ChevronRight } from 'lucide-react';
+import { Users, Clock, History, AlertCircle, Coins, Moon, Sun, Settings, X, HelpCircle, Search, Trophy, Gamepad2, TrendingUp, Wallet, User, Plus, ArrowUpRight, ArrowDownLeft, Copy, Check, ChevronRight, Dices } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import confetti from 'canvas-confetti';
 import { playWin, playLoss } from './utils/sound';
@@ -53,6 +53,35 @@ export default function App() {
     setNotification({ message, type });
   };
 
+  const handleTriggerFlow = async (type: 'deposit' | 'withdraw') => {
+    const tgUsername = botUsername || 'YOUR_BOT_USERNAME';
+    if (tgUser?.id && window.Telegram?.WebApp) {
+      try {
+        showNotification(`Triggering ${type} flow...`, "info");
+        const res = await fetch(`${BACKEND_URL}/api/trigger-bot-flow`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: tgUser.id, flowType: type })
+        });
+        if (res.ok) {
+          window.Telegram.WebApp.close();
+        } else {
+          window.Telegram.WebApp.openTelegramLink(`https://t.me/${tgUsername}?start=${type}`);
+        }
+      } catch (err) {
+        console.error("Failed to trigger flow via API:", err);
+        window.Telegram.WebApp.openTelegramLink(`https://t.me/${tgUsername}?start=${type}`);
+      }
+    } else {
+      if (window.Telegram?.WebApp) {
+        window.Telegram.WebApp.openTelegramLink(`https://t.me/${tgUsername}?start=${type}`);
+      } else {
+        window.open(`https://t.me/${tgUsername}?start=${type}`, '_blank');
+        showNotification("Opening Telegram Bot...", "success");
+      }
+    }
+  };
+
   useEffect(() => {
     if (!notification) return;
     const timer = setTimeout(() => {
@@ -81,14 +110,17 @@ export default function App() {
 
   const [isPlayersDrawerOpen, setIsPlayersDrawerOpen] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [extraBrowsers, setExtraBrowsers] = useState<number>(42);
 
   // Bottom Navigation & Mini Pages State
   const [activeTab, setActiveTab] = useState<'even_odd' | 'jackpot' | 'chance' | 'profile'>('even_odd');
+  const activeTabRef = useRef(activeTab);
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
   const [isWalletOpen, setIsWalletOpen] = useState<boolean>(false);
   const [ledgerTab, setLedgerTab] = useState<'play' | 'transactions'>('play');
   const [isJackpotTheaterMode, setIsJackpotTheaterMode] = useState<boolean>(false);
-  const [mockTransactions, setMockTransactions] = useState<any[]>([]);
+  const [transactions, setTransactions] = useState<any[]>([]);
   const [gameHistory, setGameHistory] = useState<any[]>([]);
 
   const [botUsername, setBotUsername] = useState<string>('');
@@ -96,34 +128,26 @@ export default function App() {
 
   useEffect(() => {
     fetch(`${BACKEND_URL}/api/bot-info`)
-      .then(res => res.json())
-      .then(data => {
-        if (data.username) setBotUsername(data.username);
+      .then(res => {
+        const contentType = res.headers.get("content-type");
+        if (res.ok && contentType && contentType.includes("application/json")) {
+          return res.json();
+        }
+        throw new Error(`Invalid response or non-JSON content-type: ${contentType}`);
       })
-      .catch(console.error);
-  }, []);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setExtraBrowsers(prev => {
-        const change = Math.floor(Math.random() * 5) - 2;
-        return Math.max(25, Math.min(65, prev + change));
+      .then(data => {
+        if (data && data.username) setBotUsername(data.username);
+      })
+      .catch(err => {
+        console.warn("Failed to fetch bot-info gracefully:", err);
       });
-    }, 5000);
-    return () => clearInterval(interval);
   }, []);
 
-  const totalActivePlayersCount = 100 + (roomState ? Object.keys(roomState.players).length : 0) + extraBrowsers;
+  const totalActivePlayersCount = (roomState ? Object.keys(roomState.players).length : 0);
 
   const vipPlayersList = React.useMemo(() => {
-    const roundId = roomState?.roundId || 1;
     const realPlayers = roomState?.players || {};
     
-    const seededRandom = (seed: number) => {
-      const x = Math.sin(seed++) * 10000;
-      return x - Math.floor(x);
-    };
-
     const list: any[] = [];
     
     // Add real players first
@@ -140,56 +164,7 @@ export default function App() {
       });
     });
 
-    const ethioUsernames = [
-      'Bet_Master', 'Ethio_Rich', 'Queen_Sheba', 'Abyssinia_G', 'Lasta_Spins', 
-      'Solomon_G', 'Lucy_Spins', 'Amare_B', 'Tadesse_W', 'Almaz_Y', 'Selam_A', 
-      'Zenebe_K', 'Yared_M', 'Aster_A', 'Tedla_B', 'Hiwot_L', 'Mikael_T', 
-      'Alem_H', 'Dawit_M', 'Kebede_G', 'Alpha_Spins', 'Apex_Bettor', 'Gold_Minder',
-      'Lucky_Striker', 'Mega_Winner', 'Betting_Boss', 'Sintayehu_A', 'Mesfin_T',
-      'Kiros_G', 'Frehiwot_K', 'Tsige_M', 'Biniyam_S', 'Elias_Y', 'Netsanet_B',
-      'Tariku_L', 'Helen_G', 'Rahel_T', 'Senait_D', 'Girma_W', 'Fasil_M',
-      'Zewdu_S', 'Kassa_H', 'Tefera_A', 'Yohannes_K', 'Martha_W', 'Lidya_M',
-      'Muluken_B', 'Tewodros_Y', 'Menelik_II', 'Lalibela_G', 'Axum_Spins', 'Rift_Valley'
-    ];
-
-    const fillCount = Math.max(0, 100 - list.length);
-    for (let i = 0; i < fillCount; i++) {
-      const seed = roundId * 1000 + i;
-      const r1 = seededRandom(seed);
-      const r2 = seededRandom(seed + 1);
-      const r3 = seededRandom(seed + 2);
-      const r4 = seededRandom(seed + 3);
-
-      const nameIndex = Math.floor(r1 * ethioUsernames.length);
-      const baseUsername = ethioUsernames[nameIndex];
-      const suffix = Math.floor(r2 * 900) + 100;
-      const usernameStr = `@${baseUsername}_${suffix}`;
-
-      const amountOpts = [500, 1000, 2000, 5000, 10000, 15000, 25000, 50000];
-      const amount = amountOpts[Math.floor(r3 * amountOpts.length)];
-      const side: Side = r4 > 0.5 ? 'even' : 'odd';
-
-      let badge = "Early Bird";
-      if (amount >= 25000) badge = "Apex Titan";
-      else if (amount >= 15000) badge = "High Roller";
-      else if (amount >= 5000) badge = "VIP Pro";
-      else if (r1 > 0.8) badge = "Fast-Action";
-
-      const joinSec = (0.2 + (i * 0.12) + (r2 * 0.08)).toFixed(1);
-      const joinTime = `${joinSec}s`;
-
-      list.push({
-        id: `mock-${roundId}-${i}`,
-        username: usernameStr,
-        amount,
-        side,
-        badge,
-        joinTime,
-        isReal: false,
-      });
-    }
-
-    return list.slice(0, 100);
+    return list;
   }, [roomState?.roundId, roomState?.players]);
   
   useEffect(() => {
@@ -254,7 +229,7 @@ export default function App() {
         date: new Date(tx.created_at).toLocaleString(),
         positive: tx.amount > 0
       }));
-      setMockTransactions(formatted);
+      setTransactions(formatted);
     });
 
     socket.on('userGameLogs', (data: any[]) => {
@@ -287,22 +262,25 @@ export default function App() {
 
       if (state.status === 'result' && state.winner) {
         if (!showResult && lastWinner !== state.winner) {
-          setShowResult(true);
+          const isActive = activeTabRef.current === 'even_odd';
+          if (isActive) {
+            setShowResult(true);
+            triggerHaptic('notification', 'success');
+            let fireConfetti = confetti as any;
+            if (typeof confetti === 'function') {
+              fireConfetti = confetti;
+            } else if (confetti && typeof (confetti as any).default === 'function') {
+              fireConfetti = (confetti as any).default;
+            }
+            
+            if (fireConfetti && typeof fireConfetti.create === 'function') {
+              const customConfetti = fireConfetti.create(null, { resize: true, useWorker: false });
+              customConfetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+            } else {
+              fireConfetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+            }
+          }
           setLastWinner(state.winner);
-          triggerHaptic('notification', 'success');
-          let fireConfetti = confetti as any;
-          if (typeof confetti === 'function') {
-            fireConfetti = confetti;
-          } else if (confetti && typeof (confetti as any).default === 'function') {
-            fireConfetti = (confetti as any).default;
-          }
-          
-          if (fireConfetti && typeof fireConfetti.create === 'function') {
-            const customConfetti = fireConfetti.create(null, { resize: true, useWorker: false });
-            customConfetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
-          } else {
-            fireConfetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
-          }
           
           // Check if we won
           const myBet = state.players[userId];
@@ -320,13 +298,17 @@ export default function App() {
                   socket?.emit('logTransaction', { userId, amount: myBet.amount + netWin, type: 'win', description: 'Even/Odd Win', newBalance });
                   return newBalance;
                 });
-                if (soundAlertsRef.current) playWin();
+                if (soundAlertsRef.current) {
+                   if (isActive) playWin();
+                 }
              } else {
                 setBalance(b => {
                   socket?.emit('logGamePlay', { userId, gameType: 'Even/Odd', result: 'Loss', winAmount: 0, newBalance: b });
                   return b;
                 });
-                if (soundAlertsRef.current) playLoss();
+                if (soundAlertsRef.current) {
+                   if (isActive) playLoss();
+                 }
              }
 
              setHistory(prev => {
@@ -753,7 +735,7 @@ export default function App() {
                   balance={balance}
                   setBalance={setBalance}
                   showNotification={showNotification}
-                  setMockTransactions={setMockTransactions}
+                  setTransactions={setTransactions}
                   isDarkMode={isDarkMode}
                   soundTicks={soundTicks}
                   onTheaterModeChange={setIsJackpotTheaterMode}
@@ -776,7 +758,7 @@ export default function App() {
                 <WheelOfChance
                   balance={balance}
                   setBalance={setBalance}
-                  setMockTransactions={setMockTransactions}
+                  setTransactions={setTransactions}
                   isDarkMode={isDarkMode}
                   soundTicks={soundTicks}
                   onBack={() => setActiveTab('even_odd')}
@@ -917,8 +899,8 @@ export default function App() {
                   : 'text-gray-400 hover:text-gray-500'
               }`}
             >
-              <Gamepad2 className="w-5 h-5" />
-              <span className="text-[9px] tracking-tight font-black uppercase">Arena</span>
+              <Dices className="w-5 h-5" />
+              <span className="text-[10px] tracking-tight font-black uppercase">ሞላ/ጎደለ</span>
             </button>
 
             <button
@@ -930,7 +912,7 @@ export default function App() {
               }`}
             >
               <Trophy className="w-5 h-5" />
-              <span className="text-[9px] tracking-tight font-black uppercase">Jackpot</span>
+              <span className="text-[10px] tracking-tight font-black uppercase">ዕድል</span>
             </button>
 
             <button
@@ -941,8 +923,8 @@ export default function App() {
                   : 'text-gray-400 hover:text-gray-500'
               }`}
             >
-              <TrendingUp className="w-5 h-5" />
-              <span className="text-[9px] tracking-tight font-black uppercase">Chance</span>
+              <Gamepad2 className="w-5 h-5" />
+              <span className="text-[10px] tracking-tight font-black uppercase">ፈጣን</span>
             </button>
           </nav>
         )}
@@ -1009,7 +991,9 @@ export default function App() {
                   <Coins className="w-5 h-5 text-yellow-500 animate-pulse" />
                   <div>
                     <h2 className="text-base font-black text-gray-900 dark:text-white leading-tight font-sans">Interactive Wallet Ledger</h2>
-                    <p className="text-[9px] font-bold uppercase tracking-wider text-amber-500">Deposit & Withdrawal Sandbox</p>
+                    <p className="text-xs font-bold text-gray-500 dark:text-gray-400">
+                      Balance: <span className="font-mono text-amber-500 font-extrabold">{balance.toLocaleString()} ETB</span>
+                    </p>
                   </div>
                 </div>
                 <button 
@@ -1022,33 +1006,6 @@ export default function App() {
 
               {/* Scrollable Content */}
               <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-12">
-                {/* Credit Card-Style Wallet Balance display */}
-                <div className="relative overflow-hidden bg-gradient-to-tr from-yellow-500 via-amber-600 to-amber-700 rounded-2xl p-6 text-white shadow-xl">
-                  {/* Background Accents */}
-                  <div className="absolute top-0 right-0 w-24 h-24 bg-white/10 rounded-full blur-2xl -mr-6 -mt-6" />
-                  <div className="absolute bottom-0 left-0 w-16 h-16 bg-black/10 rounded-full blur-xl -ml-4 -mb-4" />
-                  
-                  <div className="flex justify-between items-start z-10 relative">
-                    <div>
-                      <div className="text-[10px] font-black uppercase tracking-widest opacity-80">Interactive Ledger</div>
-                      <h2 className="text-2xl font-black mt-1 font-mono tracking-tight">{balance.toLocaleString()}</h2>
-                      <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full inline-block mt-1 font-bold">ETHIO COINS</span>
-                    </div>
-                    <Coins className="w-8 h-8 opacity-40 animate-pulse shrink-0" />
-                  </div>
-
-                  <div className="mt-8 flex justify-between items-center z-10 relative text-[10px] opacity-90 font-mono">
-                    <div>
-                      <span className="block opacity-60">ACCOUNT IDENTIFIER</span>
-                      <span className="font-bold">USR_{userId.slice(5, 12).toUpperCase()}</span>
-                    </div>
-                    <div className="text-right">
-                      <span className="block opacity-60">STATUS</span>
-                      <span className="font-bold tracking-widest">ACTIVE VIP</span>
-                    </div>
-                  </div>
-                </div>
-
                 {/* Deposit and Withdrawal Bot Redirect Panels */}
                 <div className="bg-gray-50 dark:bg-gray-950 rounded-2xl p-4 border border-gray-200 dark:border-gray-800 transition-colors shadow-xs space-y-4 text-center">
                   <div className="p-2">
@@ -1058,29 +1015,13 @@ export default function App() {
                     </p>
                     <div className="flex gap-2 justify-center">
                       <button
-                        onClick={() => {
-                          const tgUsername = botUsername || 'YOUR_BOT_USERNAME';
-                          if (window.Telegram?.WebApp) {
-                            window.Telegram.WebApp.openTelegramLink(`https://t.me/${tgUsername}?start=deposit`);
-                          } else {
-                            window.open(`https://t.me/${tgUsername}?start=deposit`, '_blank');
-                            showNotification("Opening Telegram Bot...", "success");
-                          }
-                        }}
+                        onClick={() => handleTriggerFlow('deposit')}
                         className="flex-1 bg-green-600 hover:bg-green-500 text-white font-black px-4 py-3 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95 cursor-pointer"
                       >
                         <ArrowDownLeft className="w-4 h-4" /> Deposit via Bot
                       </button>
                       <button
-                        onClick={() => {
-                          const tgUsername = botUsername || 'YOUR_BOT_USERNAME';
-                          if (window.Telegram?.WebApp) {
-                            window.Telegram.WebApp.openTelegramLink(`https://t.me/${tgUsername}?start=withdraw`);
-                          } else {
-                            window.open(`https://t.me/${tgUsername}?start=withdraw`, '_blank');
-                            showNotification("Opening Telegram Bot...", "success");
-                          }
-                        }}
+                        onClick={() => handleTriggerFlow('withdraw')}
                         className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-black px-4 py-3 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95 cursor-pointer"
                       >
                         <ArrowUpRight className="w-4 h-4" /> Withdraw via Bot
@@ -1119,7 +1060,7 @@ export default function App() {
                       <History className="w-4 h-4 mr-1" /> Transaction History
                     </h3>
                     <div className="space-y-2 divide-y divide-gray-100 dark:divide-gray-800/40">
-                      {mockTransactions.map((tx) => (
+                      {transactions.map((tx) => (
                         <div key={tx.id} className="flex justify-between items-center pt-2.5 first:pt-0">
                           <div>
                             <div className="text-xs font-bold text-gray-800 dark:text-gray-200">{tx.desc}</div>

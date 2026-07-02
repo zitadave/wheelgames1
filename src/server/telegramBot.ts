@@ -1,3 +1,4 @@
+import { registerCommandHandlers } from "./bot/commands.js";
 import * as TelegramBot from "node-telegram-bot-api";
 import { supabase } from "./supabase.js";
 import { getAnalysisSummary } from "./analysis.js";
@@ -31,6 +32,7 @@ interface UserState {
 }
 
 const userStates = new Map<string, UserState>();
+const userLanguages = new Map<number, string>();
 
 interface SetAdminState {
   action: 'idle' | 'awaiting_add_userid' | 'awaiting_add_password' | 'awaiting_del_password' | 'change_pw_old_auth' | 'change_pw_new_input' | 'change_pw_confirm';
@@ -298,6 +300,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       { command: "deposit", description: "Deposit ETB into your balance" },
       { command: "withdraw", description: "Withdraw ETB from your balance" },
       { command: "support", description: "Show contact support details" },
+      { command: "language", description: "Change bot language" },
       { command: "cancel", description: "Cancel current operation or active flows" }
     ]);
 
@@ -451,6 +454,8 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
     }
   };
 
+  registerCommandHandlers(bot, logBot, checkRegisteredAndHandle, sendSupportCard);
+
   // --- BOT COMMANDS HANDLERS ---
   
   // Start Command
@@ -556,13 +561,6 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
           ]
         }
       });
-    });
-  });
-
-  // Support Command
-  bot.onText(/\/support/, async (msg) => {
-    await checkRegisteredAndHandle(msg, () => {
-      sendSupportCard(msg.chat.id);
     });
   });
 
@@ -1811,6 +1809,14 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       await bot.answerCallbackQuery(query.id);
       const composer: BroadcastComposer = { type: 'none', text: '', photoFileId: '', buttons: [] };
       await renderBroadcastDashboard(bot, chatId, userId, composer);
+      return;
+    }
+
+    if (data.startsWith("lang_")) {
+      const lang = data === "lang_en" ? "en" : "am";
+      userLanguages.set(userId, lang);
+      await bot.answerCallbackQuery(query.id, { text: `Language changed to ${lang === 'en' ? 'English' : 'Amharic'}` });
+      bot.sendMessage(chatId, lang === 'en' ? "Language set to English." : "ቋንቋ ወደ አማርኛ ተቀይሯል።");
       return;
     }
 

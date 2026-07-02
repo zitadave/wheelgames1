@@ -34,6 +34,27 @@ interface UserState {
 const userStates = new Map<string, UserState>();
 const userLanguages = new Map<number, string>();
 
+function t(key: string, lang: string = 'en', params?: Record<string, string>): string {
+  const translations: Record<string, Record<string, string>> = {
+    'welcome_desc': {
+      'en': `🎮 <b>Welcome to ETB Game Hub!</b> 🚀\n\nExperience the ultimate Telegram gaming destination! Test your prediction skills with 🟢 <b>Even/Odd</b>, enter the 🏆 <b>Jackpot Arena</b>, or spin the 🎡 <b>Wheel of Chance</b> to win incredible rewards.\n\n💎 <i>Play instantly, win with real-time multipliers, and withdraw directly to your favorite wallet!</i>`,
+      'am': `🎮 <b>እንኳን ወደ ETB ጌም ሃብ በደህና መጡ!</b> 🚀\n\nበቴሌግራም ላይ ምርጥ የሆነውን የጌም ማዕከል ይለማመዱ! በ🟢 <b>Even/Odd</b> ችሎታዎን ይሞክሩ፣ ወደ 🏆 <b>Jackpot Arena</b> ይግቡ፣ ወይም 🎡 <b>Wheel of Chance</b> በማሽከርከር ትልቅ ሽልማት ያሸንፉ።\n\n💎 <i>አሁኑኑ ይጫወቱ፣ ያሸንፉ እና በቀጥታ ወደ አካውንትዎ ያውጡ!</i>`
+    },
+    'btn_start_play': {
+      'en': "🎮 Start Play 🚀",
+      'am': "🎮 ለመጫወት ጀምር 🚀"
+    }
+  };
+  
+  let text = translations[key]?.[lang] || translations[key]?.['en'] || key;
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      text = text.replace(`{${k}}`, v);
+    }
+  }
+  return text;
+}
+
 interface SetAdminState {
   action: 'idle' | 'awaiting_add_userid' | 'awaiting_add_password' | 'awaiting_del_password' | 'change_pw_old_auth' | 'change_pw_new_input' | 'change_pw_confirm';
   targetUserId?: number;
@@ -266,6 +287,39 @@ if (adminEnv) {
   });
 }
 
+// Function to sync admins with Supabase
+async function syncAdminsFromDB() {
+  try {
+    const { data: adminUsers, error } = await supabase
+      .from('users')
+      .select('id')
+      .eq('is_admin', true);
+    
+    if (error) {
+      if (!error.message.includes('schema cache')) {
+        logBot(`Error fetching admins from DB: ${error.message}`);
+      }
+      return;
+    }
+
+    if (adminUsers) {
+      adminUsers.forEach(u => {
+        const id = parseInt(u.id, 10);
+        if (!isNaN(id)) adminChatIds.add(id);
+      });
+    }
+
+    // Ensure all in-memory admins are synced back to DB
+    for (const adminId of adminChatIds) {
+      await supabase.from('users').update({ is_admin: true }).eq('id', adminId.toString()).then(({ error }) => {
+        if (error && !error.message.includes('schema cache')) logBot(`Error syncing admin ${adminId}: ${error.message}`);
+      });
+    }
+  } catch (err: any) {
+    logBot(`syncAdminsFromDB error: ${err.message}`);
+  }
+}
+
 // Generate unique Ref Codes (e.g., C8OM3PUXUX, OTY2A7PFR2)
 function generateRef(length = 10): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -292,6 +346,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
   try {
     botInfo = await bot.getMe();
     console.log(`Telegram Bot @${botInfo.username} initialized.`);
+    await syncAdminsFromDB();
 
     // Set bot commands
     await bot.setMyCommands([
@@ -432,17 +487,16 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       if (data && data.length > 0) {
         await onRegistered();
       } else {
+        const lang = userLanguages.get(parseInt(userId)) || 'en';
         pendingRegistrations.set(userId, { payload: "" });
-        const desc = `🎮 <b>Welcome to ETB Game Hub!</b> 🚀\n\n` +
-          `Experience the ultimate Telegram gaming destination! Test your prediction skills with 🟢 <b>Even/Odd</b>, enter the 🏆 <b>Jackpot Arena</b>, or spin the 🎡 <b>Wheel of Chance</b> to win incredible rewards.\n\n` +
-          `💎 <i>Play instantly, win with real-time multipliers, and withdraw directly to your favorite wallet!</i>`;
+        const desc = t('welcome_desc', lang);
 
         bot.sendMessage(chatId, desc, {
           parse_mode: "HTML",
           reply_markup: {
             inline_keyboard: [
               [
-                { text: "🎮 Start Play / ለመጫወት ጀምር 🚀", callback_data: "register_start" }
+                { text: t('btn_start_play', lang), callback_data: "register_start" }
               ]
             ]
           }
@@ -1282,6 +1336,10 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
             const targetId = adminState.targetUserId;
             if (targetId) {
               adminChatIds.add(targetId);
+              // Update in DB safely
+              supabase.from('users').update({ is_admin: true }).eq('id', targetId.toString()).then(({ error }) => {
+                if (error && !error.message.includes('schema cache')) logBot(`Error updating admin status in DB for ${targetId}: ${error.message}`);
+              });
               bot.sendMessage(chatId, `👑 <b>Success!</b>\n\nUser ID <code>${targetId}</code> has been successfully added to the Admin list.`, { parse_mode: "HTML" });
 
               // Notify target user
@@ -1304,6 +1362,10 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
             const deleteTargetId = adminState.deleteTargetId;
             if (deleteTargetId) {
               adminChatIds.delete(deleteTargetId);
+              // Update in DB safely
+              supabase.from('users').update({ is_admin: false }).eq('id', deleteTargetId.toString()).then(({ error }) => {
+                if (error && !error.message.includes('schema cache')) logBot(`Error updating admin status in DB for ${deleteTargetId}: ${error.message}`);
+              });
               bot.sendMessage(chatId, `❌ <b>Success!</b>\n\nAdmin ID <code>${deleteTargetId}</code> has been successfully removed from the Admin list.`, { parse_mode: "HTML" });
 
               // Notify the deleted admin

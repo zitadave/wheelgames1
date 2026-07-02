@@ -34,6 +34,16 @@ BEGIN
     EXCEPTION
         WHEN duplicate_column THEN null;
     END;
+    BEGIN
+        ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT false;
+    EXCEPTION
+        WHEN duplicate_column THEN null;
+    END;
+    BEGIN
+        ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'en';
+    EXCEPTION
+        WHEN duplicate_column THEN null;
+    END;
 END $$;
 
 -- Enable Realtime for the users table

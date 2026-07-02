@@ -15,3 +15,30 @@ if (!supabaseUrl || !supabaseKey) {
 }
 
 export const supabase = createClient(supabaseUrl || "https://placeholder.supabase.co", supabaseKey || "placeholder_key");
+
+/**
+ * Wrapper for Supabase queries to automatically retry on network failures or timeouts.
+ */
+export async function withRetry<T>(
+  operation: () => Promise<{ data: T | null; error: any }>,
+  maxRetries = 3,
+  delayMs = 1000
+): Promise<{ data: T | null; error: any }> {
+  let attempt = 0;
+  while (attempt < maxRetries) {
+    try {
+      const result = await operation();
+      if (result.error && (result.error.code === 'ETIMEDOUT' || result.error.code === 'ECONNRESET' || result.error.message?.includes('fetch'))) {
+        throw result.error; // trigger retry
+      }
+      return result;
+    } catch (err: any) {
+      attempt++;
+      if (attempt >= maxRetries) {
+        return { data: null, error: err };
+      }
+      await new Promise(resolve => setTimeout(resolve, delayMs * attempt));
+    }
+  }
+  return { data: null, error: new Error('Max retries reached') };
+}

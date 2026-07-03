@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS users (
     photo_url TEXT,
     first_name TEXT,
     last_name TEXT,
-    balance NUMERIC DEFAULT 100000,
+    balance NUMERIC DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 

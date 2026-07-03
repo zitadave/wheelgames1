@@ -328,6 +328,29 @@ export function WheelOfChance({
     const duration = 30000; // 30 seconds for maximum suspense as requested
     const startTime = performance.now();
 
+    // Trigger announcement 5 seconds early (at 25s mark if duration is 30s)
+    const earlyAnnouncementTimer = setTimeout(() => {
+      if (!isMounted.current || !isSpinningRef.current) return;
+      
+      // Calculate payouts and winner info early so the pop-up has data
+      setJustDrawnWinner(winningSectorVal);
+      setWinners(prev => {
+        const newWinners = { ...prev, [thisDraw]: winningSectorVal };
+        if (thisDraw === (activeRoom === '1-10' ? 2 : 3)) {
+          setHistory(h => {
+            if (h[activeRoom].some((x: any) => x.roundId === currentRoundId)) return h;
+            return {
+              ...h,
+              [activeRoom]: [{ roundId: currentRoundId, winners: newWinners }, ...h[activeRoom]].slice(0, 10)
+            };
+          });
+        }
+        return newWinners;
+      });
+
+      setPhase('announcing');
+    }, duration - 5000);
+
     let lastTickAngle = 0;
 
     const animateWheel = (now: number) => {
@@ -351,6 +374,7 @@ export function WheelOfChance({
         animationFrameRef.current = requestAnimationFrame(animateWheel);
       } else {
         isSpinningRef.current = false;
+        clearTimeout(earlyAnnouncementTimer);
         
         setJustDrawnWinner(winningSectorVal);
         setWinners(prev => {
@@ -367,11 +391,8 @@ export function WheelOfChance({
           return newWinners;
         });
         
-        // Wait 0.1s to allow the final frame to render and look fully stopped before announcement
-        setTimeout(() => {
-          if (!isMounted.current) return;
-          setPhase('announcing');
-        }, 100);
+        // Ensure phase is announcing (might already be from early timer)
+        setPhase('announcing');
 
         // Payout Calculations based on room & draw tier
         const grossPool = maxSlots * entryFee;
@@ -483,7 +504,7 @@ export function WheelOfChance({
               resetRoom();
             }, 500);
           }
-        }, 2000); // 2 seconds announcement pop-up (decreased from 5s)
+        }, 5000); // 5 seconds announcement pop-up
       }
     };
 

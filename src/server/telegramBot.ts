@@ -238,10 +238,17 @@ interface PromptsConfig {
   withdraw_declined_msg: string;
 
   welcome_msg: string;
+  welcome_image?: string;
   welcome_guest_msg: string;
+  welcome_guest_image?: string;
   support_card_msg: string;
 
   welcome_buttons: CustomButton[][];
+  referral_msg: string;
+  referral_image?: string;
+  referral_share_text: string;
+  referral_share_image?: string;
+  referral_buttons: CustomButton[][];
   custom_commands?: {
     [cmd: string]: CustomCommand;
   };
@@ -266,7 +273,9 @@ const DEFAULT_PROMPTS_CONFIG: PromptsConfig = {
   withdraw_declined_msg: "❌ *Withdrawal Declined*\n\nYour withdrawal of *{amount} Birr* was declined and refunded.",
 
   welcome_msg: "👋 *Welcome to ETB Game Hub, {name}!* 🎮\n\nExperience the thrill of real-time multiplayer gaming right here in Telegram!\n\n💰 *Your current balance:* `{balance}`\n\n🚀 *Available Games:*\n• 🟢 *Even/Odd* - High-octane multipliers and double-ups\n• 🏆 *Jackpot Arena* - Secure spots and sweep the pool prize\n• 🎡 *Wheel of Chance* - High stakes wheel of fortune\n\n👇 Click the button below to launch the Mini App and start playing immediately!",
+  welcome_image: "",
   welcome_guest_msg: "🎮 <b>Welcome to ETB Game Hub!</b> 🚀\n\nExperience the ultimate Telegram gaming destination! Test your prediction skills with 🟢 <b>Even/Odd</b>, enter the 🏆 <b>Jackpot Arena</b>, or spin the 🎡 <b>Wheel of Chance</b> to win incredible rewards.\n\n💎 <i>Play instantly, win with real-time multipliers, and withdraw directly to your favorite wallet!</i>",
+  welcome_guest_image: "",
   support_card_msg: "📞 *Contact Support*\n\n📱 *Phone:* `+251-931-50-35-59`\n📧 *Email:* `support@wheelgame.et`\n💬 *Telegram:* @wheelgame_support\n\n⏰ *Support Hours:*\nMonday - Sunday: 9 AM - 9 PM\n\nWe're here to help!",
 
   welcome_buttons: [
@@ -279,6 +288,15 @@ const DEFAULT_PROMPTS_CONFIG: PromptsConfig = {
     ],
     [
       { text: "📞 Contact Support", type: "callback", value: "menu_support" }
+    ]
+  ],
+  referral_msg: "🤝 <b>Invite your friends and families!</b>\n\nShare your unique referral link and earn rewards when they join and play in the ETB Game Hub.\n\n🚀 <i>Let's grow the community together!</i>",
+  referral_image: "",
+  referral_share_text: "Join me on ETB Game Hub and win big!",
+  referral_share_image: "",
+  referral_buttons: [
+    [
+      { text: "📢 Share to Friends", type: "url", value: "https://t.me/share/url?url=https://t.me/{bot_username}?start=ref_{user_id}&text={referral_share_text}" }
     ]
   ],
   custom_commands: {},
@@ -519,6 +537,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       { command: "balance", description: "Check your current wallet balance" },
       { command: "deposit", description: "Deposit ETB into your balance" },
       { command: "withdraw", description: "Withdraw ETB from your balance" },
+      { command: "referral", description: "Invite friends and earn rewards" },
       { command: "support", description: "Show contact support details" },
       { command: "language", description: "Change bot language" },
       { command: "cancel", description: "Cancel current operation or active flows" }
@@ -764,12 +783,22 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
         })
       );
 
-      bot.sendMessage(chatId, welcomeMsg, {
-        parse_mode: "Markdown",
+      const options = {
+        parse_mode: "Markdown" as const,
         reply_markup: {
           inline_keyboard: welcomeButtonsRows
         }
-      });
+      };
+
+      if (promptsConfig.welcome_image) {
+        bot.sendPhoto(chatId, promptsConfig.welcome_image, {
+          caption: welcomeMsg,
+          parse_mode: "Markdown",
+          reply_markup: options.reply_markup
+        }).catch(() => bot.sendMessage(chatId, welcomeMsg, options));
+      } else {
+        bot.sendMessage(chatId, welcomeMsg, options);
+      }
     } else {
       pendingRegistrations.set(userId, { payload });
 
@@ -777,8 +806,8 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
         `Experience the ultimate Telegram gaming destination! Test your prediction skills with 🟢 <b>Even/Odd</b>, enter the 🏆 <b>Jackpot Arena</b>, or spin the 🎡 <b>Wheel of Chance</b> to win incredible rewards.\n\n` +
         `💎 <i>Play instantly, win with real-time multipliers, and withdraw directly to your favorite wallet!</i>`;
 
-      bot.sendMessage(chatId, desc, {
-        parse_mode: "HTML",
+      const options = {
+        parse_mode: "HTML" as const,
         reply_markup: {
           inline_keyboard: [
             [
@@ -786,7 +815,17 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
             ]
           ]
         }
-      });
+      };
+
+      if (promptsConfig.welcome_guest_image) {
+        bot.sendPhoto(chatId, promptsConfig.welcome_guest_image, {
+          caption: desc,
+          parse_mode: "HTML",
+          reply_markup: options.reply_markup
+        }).catch(() => bot.sendMessage(chatId, desc, options));
+      } else {
+        bot.sendMessage(chatId, desc, options);
+      }
     }
   });
 
@@ -820,6 +859,48 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
   bot.onText(/\/withdraw/, async (msg) => {
     await checkRegisteredAndHandle(msg, () => {
       if (msg.from?.id) startWithdrawalFlow(msg.chat.id, msg.from.id.toString());
+    });
+  });
+
+  bot.onText(/\/referral/, async (msg) => {
+    await checkRegisteredAndHandle(msg, () => {
+      const chatId = msg.chat.id;
+      const userId = msg.from?.id.toString();
+      if (!userId) return;
+
+      const botUsername = botInfo?.username || "ETBGameHubBot";
+      const referralShareText = encodeURIComponent(promptsConfig.referral_share_text || "Join me on ETB Game Hub and win big!");
+      
+      const referralMsg = (promptsConfig.referral_msg || "🤝 <b>Invite your friends and families!</b>")
+        .replace(/{user_id}/g, userId)
+        .replace(/{bot_username}/g, botUsername)
+        .replace(/{referral_share_text}/g, promptsConfig.referral_share_text);
+
+      const buttons = (promptsConfig.referral_buttons || []).map(row =>
+        row.map(btn => {
+          const btnVal = btn.value
+            .replace(/{user_id}/g, userId)
+            .replace(/{bot_username}/g, botUsername)
+            .replace(/{referral_share_text}/g, referralShareText);
+          return { text: btn.text, url: btnVal };
+        })
+      );
+
+      const options = {
+        parse_mode: "HTML" as const,
+        reply_markup: {
+          inline_keyboard: buttons
+        }
+      };
+
+      if (promptsConfig.referral_image) {
+        bot.sendPhoto(chatId, promptsConfig.referral_image, {
+          caption: referralMsg,
+          ...options
+        }).catch(() => bot.sendMessage(chatId, referralMsg, options));
+      } else {
+        bot.sendMessage(chatId, referralMsg, options);
+      }
     });
   });
 
@@ -904,22 +985,64 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       return;
     }
 
-    bot.sendMessage(chatId, "🛠️ <b>Main Control Panel</b>", {
-      parse_mode: "HTML",
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: "👑 Set Admin", callback_data: "control_setadmin" },
-            { text: "📊 Analysis", callback_data: "control_analysis" }
-          ],
-          [
-            { text: "📢 Broadcast", callback_data: "control_broadcast" },
-            { text: "📝 Edit Prompts", callback_data: "control_edit" }
-          ]
-        ]
-      }
-    });
+    renderMainControlPanel(chatId);
   });
+
+  function renderMainControlPanel(chatId: number, messageId?: number) {
+    const text = "🛠️ <b>Main Control Panel</b>";
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: "👑 Set Admin", callback_data: "control_setadmin" },
+          { text: "📊 Analysis", callback_data: "control_analysis" }
+        ],
+        [
+          { text: "📢 Broadcast", callback_data: "control_broadcast" },
+          { text: "📝 Edit Prompts", callback_data: "control_edit" }
+        ],
+        [
+          { text: "🔗 Command Links", callback_data: "control_links" }
+        ]
+      ]
+    };
+
+    if (messageId) {
+      bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard })
+        .catch(() => bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: keyboard }));
+    } else {
+      bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: keyboard });
+    }
+  }
+
+  function renderCommandLinks(chatId: number, messageId?: number) {
+    const botUsername = botInfo?.username || "ETBGameHubBot";
+    let text = "🔗 <b>Direct Command & Deep Links</b>\n\n";
+    text += `• <b>Start:</b> <code>https://t.me/${botUsername}?start=1</code>\n`;
+    text += `• <b>Deposit:</b> <code>https://t.me/${botUsername}?start=deposit</code>\n`;
+    text += `• <b>Withdraw:</b> <code>https://t.me/${botUsername}?start=withdraw</code>\n`;
+    text += `• <b>Referral:</b> <code>/referral</code>\n`;
+    text += `• <b>Play:</b> <code>/play</code>\n\n`;
+    
+    text += "🛠️ <b>Admin Commands:</b>\n";
+    text += `• <code>/control</code> - Main Panel\n`;
+    text += `• <code>/edit</code> - Edit Prompts\n`;
+    text += `• <code>/analysis</code> - Game Analysis\n`;
+    text += `• <code>/broadcast</code> - Message Broadcast\n`;
+    text += `• <code>/setadmin</code> - Manage Admins\n`;
+    
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: "🔙 Back to Control", callback_data: "control_back" }]
+      ]
+    };
+
+    if (messageId) {
+      bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard })
+        .catch(() => bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: keyboard }));
+    } else {
+      bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: keyboard });
+    }
+  }
 
   bot.onText(/\/edit/, (msg) => {
     const chatId = msg.chat.id;
@@ -949,10 +1072,16 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
           { text: "📤 Withdrawal Flow Prompts", callback_data: "edit_section_withdrawal" }
         ],
         [
+          { text: "🤝 Referral Prompt", callback_data: "edit_section_referral" }
+        ],
+        [
           { text: "🏦 Bank Accounts Detail", callback_data: "edit_section_banks" }
         ],
         [
           { text: "✨ Custom Commands Manager", callback_data: "edit_section_custom_commands" }
+        ],
+        [
+          { text: "🛠️ Main Control Panel", callback_data: "control_back" }
         ]
       ]
     };
@@ -1494,7 +1623,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       if (cmdName.includes("@")) {
         cmdName = cmdName.split("@")[0];
       }
-      
+
       const customCmd = promptsConfig.custom_commands?.[cmdName];
       if (customCmd) {
         try {
@@ -1543,6 +1672,27 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
 
       const key = editState.editingKey;
       
+      // Handle Image/Photo for specific keys
+      const imageKeys = ['referral_image', 'referral_share_image', 'welcome_image', 'welcome_guest_image'];
+      if (imageKeys.includes(key as string) && msg.photo && msg.photo.length > 0) {
+        const fileId = msg.photo[msg.photo.length - 1].file_id;
+        (promptsConfig as any)[key] = fileId;
+        savePromptsConfig(promptsConfig);
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, `✅ <b>Successfully updated the image!</b>`, { parse_mode: "HTML" });
+        sendEditPanelMenu(chatId);
+        return;
+      }
+
+      if (text.toLowerCase() === 'none' && imageKeys.includes(key as string)) {
+        (promptsConfig as any)[key] = "";
+        savePromptsConfig(promptsConfig);
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, `✅ <b>Successfully removed the image!</b>`, { parse_mode: "HTML" });
+        sendEditPanelMenu(chatId);
+        return;
+      }
+
       try {
         if (key.startsWith("bank_")) {
           // Format: bank_{bankId}_{prop}
@@ -1585,24 +1735,53 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
           await bot.sendMessage(chatId, `✅ <b>Successfully updated prompt for "${key}"!</b>`, { parse_mode: "HTML" });
 
           // Render corresponding section menu
-          const section = key.startsWith("withdraw") ? "edit_section_withdrawal" : "edit_section_deposit";
-          const sectionTitle = key.startsWith("withdraw") ? "📤 Withdrawal Flow Prompts" : "📥 Deposit Flow Prompts";
-          const sectionButtons = key.startsWith("withdraw") ? [
-            [{ text: "💰 Start Message", callback_data: "edit_key_withdraw_start_msg" }],
-            [{ text: "📱 Telebirr Phone Prompt", callback_data: "edit_key_withdraw_telebirr_prompt" }],
-            [{ text: "🏦 Other Bank Account Prompt", callback_data: "edit_key_withdraw_other_bank_prompt" }],
-            [{ text: "✅ Success Message", callback_data: "edit_key_withdraw_success_msg" }],
-            [{ text: "🎉 Approved Message", callback_data: "edit_key_withdraw_approved_msg" }],
-            [{ text: "❌ Declined Message", callback_data: "edit_key_withdraw_declined_msg" }],
-            [{ text: "🔙 Back", callback_data: "control_edit" }]
-          ] : [
-            [{ text: "💰 Start Message", callback_data: "edit_key_deposit_start_msg" }],
-            [{ text: "📞 Support Username/Text", callback_data: "edit_key_support_text" }],
-            [{ text: "✅ Success Message", callback_data: "edit_key_deposit_success_msg" }],
-            [{ text: "🎉 Approved Message", callback_data: "edit_key_deposit_approved_msg" }],
-            [{ text: "❌ Declined Message", callback_data: "edit_key_deposit_declined_msg" }],
-            [{ text: "🔙 Back", callback_data: "control_edit" }]
-          ];
+          let section = "control_edit";
+          let sectionTitle = "📝 Edit Panel";
+          let sectionButtons: any[] = [];
+
+          if (key.startsWith("withdraw")) {
+            section = "edit_section_withdrawal";
+            sectionTitle = "📤 Withdrawal Flow Prompts";
+            sectionButtons = [
+              [{ text: "💰 Start Message", callback_data: "edit_key_withdraw_start_msg" }],
+              [{ text: "📱 Telebirr Phone Prompt", callback_data: "edit_key_withdraw_telebirr_prompt" }],
+              [{ text: "🏦 Other Bank Account Prompt", callback_data: "edit_key_withdraw_other_bank_prompt" }],
+              [{ text: "✅ Success Message", callback_data: "edit_key_withdraw_success_msg" }],
+              [{ text: "🎉 Approved Message", callback_data: "edit_key_withdraw_approved_msg" }],
+              [{ text: "❌ Declined Message", callback_data: "edit_key_withdraw_declined_msg" }],
+              [{ text: "🔙 Back", callback_data: "control_edit" }]
+            ];
+          } else if (key.startsWith("deposit") || key === "support_text") {
+            section = "edit_section_deposit";
+            sectionTitle = "📥 Deposit Flow Prompts";
+            sectionButtons = [
+              [{ text: "💰 Start Message", callback_data: "edit_key_deposit_start_msg" }],
+              [{ text: "📞 Support Username/Text", callback_data: "edit_key_support_text" }],
+              [{ text: "✅ Success Message", callback_data: "edit_key_deposit_success_msg" }],
+              [{ text: "🎉 Approved Message", callback_data: "edit_key_deposit_approved_msg" }],
+              [{ text: "❌ Declined Message", callback_data: "edit_key_deposit_declined_msg" }],
+              [{ text: "🔙 Back", callback_data: "control_edit" }]
+            ];
+          } else if (key === "referral_msg" || key === "referral_image" || key === "referral_share_text") {
+            section = "edit_section_referral";
+            sectionTitle = "🤝 Referral Prompt Settings";
+            sectionButtons = [
+              [{ text: "📝 Referral Message Text", callback_data: "edit_key_referral_msg" }],
+              [{ text: "🖼️ Referral Image", callback_data: "edit_key_referral_image" }],
+              [{ text: "📤 Referral Share Text", callback_data: "edit_key_referral_share_text" }],
+              [{ text: "🔘 Referral Buttons Menu", callback_data: "edit_section_referral_buttons" }],
+              [{ text: "🔙 Back", callback_data: "control_edit" }]
+            ];
+          } else if (key.startsWith("welcome") || key === "support_card_msg") {
+            section = "edit_section_welcome";
+            sectionTitle = "👋 Welcome & Support Prompts";
+            sectionButtons = [
+              [{ text: "👋 Welcome Message (Registered)", callback_data: "edit_key_welcome_msg" }],
+              [{ text: "👋 Guest Welcome Message (Unregistered)", callback_data: "edit_key_welcome_guest_msg" }],
+              [{ text: "📞 Support Card Message", callback_data: "edit_key_support_card_msg" }],
+              [{ text: "🔙 Back", callback_data: "control_edit" }]
+            ];
+          }
 
           await bot.sendMessage(chatId, `<b>${sectionTitle}</b>\nSelect which prompt or instruction you want to edit:`, {
             parse_mode: "HTML",
@@ -2411,6 +2590,73 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       }
       return;
     }
+
+    // 14. REFERRAL BUTTON: EDIT LABEL
+    if (state.step === 'awaiting_refbtn_label_change') {
+      if (!numUserId || !adminChatIds.has(numUserId)) return;
+      const rIndex = state.row;
+      const cIndex = state.col;
+      if (rIndex !== undefined && cIndex !== undefined && promptsConfig.referral_buttons?.[rIndex]?.[cIndex]) {
+        promptsConfig.referral_buttons[rIndex][cIndex].text = text;
+        savePromptsConfig(promptsConfig);
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, `✅ Successfully updated referral button label to <b>"${text}"</b>!`, { parse_mode: "HTML" });
+        await bot.sendMessage(chatId, "🤝 <b>Referral Buttons Editor</b>", {
+          reply_markup: {
+            inline_keyboard: [[{ text: "🔙 Back to Buttons Panel", callback_data: "edit_section_referral_buttons" }]]
+          }
+        });
+      }
+      return;
+    }
+
+    // 15. REFERRAL BUTTON: EDIT URL
+    if (state.step === 'awaiting_refbtn_url_change') {
+      if (!numUserId || !adminChatIds.has(numUserId)) return;
+      const rIndex = state.row;
+      const cIndex = state.col;
+      if (rIndex !== undefined && cIndex !== undefined && promptsConfig.referral_buttons?.[rIndex]?.[cIndex]) {
+        promptsConfig.referral_buttons[rIndex][cIndex].value = text;
+        savePromptsConfig(promptsConfig);
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, `✅ Successfully updated referral button share URL to <code>${text}</code>!`, { parse_mode: "HTML" });
+        await bot.sendMessage(chatId, "🤝 <b>Referral Buttons Editor</b>", {
+          reply_markup: {
+            inline_keyboard: [[{ text: "🔙 Back to Buttons Panel", callback_data: "edit_section_referral_buttons" }]]
+          }
+        });
+      }
+      return;
+    }
+
+    // 16. REFERRAL BUTTON: ADD LABEL
+    if (state.step === 'awaiting_refbtn_add_label') {
+      if (!numUserId || !adminChatIds.has(numUserId)) return;
+      userStates.set(userId, {
+        ...state,
+        step: 'awaiting_refbtn_add_url',
+        new_label: text
+      });
+      await bot.sendMessage(chatId, `✍️ <b>Now enter the share URL link for "${text}":</b>\n\nExample: <code>https://t.me/share/url?url=https://t.me/{bot_username}?start={user_id}&text=Join now!</code>`, { parse_mode: "HTML" });
+      return;
+    }
+
+    // 17. REFERRAL BUTTON: ADD URL
+    if (state.step === 'awaiting_refbtn_add_url') {
+      if (!numUserId || !adminChatIds.has(numUserId)) return;
+      const label = state.new_label || "New Button";
+      if (!promptsConfig.referral_buttons) promptsConfig.referral_buttons = [];
+      promptsConfig.referral_buttons.push([{ text: label, type: 'url', value: text }]);
+      savePromptsConfig(promptsConfig);
+      userStates.set(userId, { step: 'idle' });
+      await bot.sendMessage(chatId, `✅ Successfully added new referral button <b>"${label}"</b>!`, { parse_mode: "HTML" });
+      await bot.sendMessage(chatId, "🤝 <b>Referral Buttons Panel</b>", {
+        reply_markup: {
+          inline_keyboard: [[{ text: "🔙 Back to Buttons", callback_data: "edit_section_referral_buttons" }]]
+        }
+      });
+      return;
+    }
   });
 
   // --- CONTACT REGISTER HANDLER ---
@@ -2719,7 +2965,9 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       const keyboard = {
         inline_keyboard: [
           [{ text: "👋 Welcome Message (Registered)", callback_data: "edit_key_welcome_msg" }],
+          [{ text: "🖼️ Welcome Image (Registered)", callback_data: "edit_key_welcome_image" }],
           [{ text: "👋 Guest Welcome Message (Unregistered)", callback_data: "edit_key_welcome_guest_msg" }],
+          [{ text: "🖼️ Guest Welcome Image (Unregistered)", callback_data: "edit_key_welcome_guest_image" }],
           [{ text: "📞 Support Card Message", callback_data: "edit_key_support_card_msg" }],
           [{ text: "🔙 Back", callback_data: "control_edit" }]
         ]
@@ -2770,6 +3018,80 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
           reply_markup: { inline_keyboard: inlineKeyboard }
         });
       }
+      return;
+    }
+
+    if (data === "edit_section_referral") {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      const text = "🤝 <b>Referral Prompt Settings</b>\nSelect which aspect you want to customize:";
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "📝 Referral Message Text", callback_data: "edit_key_referral_msg" }],
+          [{ text: "🖼️ Referral Image", callback_data: "edit_key_referral_image" }],
+          [{ text: "📤 Referral Share Text", callback_data: "edit_key_referral_share_text" }],
+          [{ text: "🖼️ Referral Share Image", callback_data: "edit_key_referral_share_image" }],
+          [{ text: "🔘 Referral Buttons Menu", callback_data: "edit_section_referral_buttons" }],
+          [{ text: "🔙 Back", callback_data: "control_edit" }]
+        ]
+      };
+      if (messageId) {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard });
+      }
+      return;
+    }
+
+    if (data === "edit_section_referral_buttons") {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      const buttons = promptsConfig.referral_buttons || [];
+      let text = "🔘 <b>Referral Buttons Editor</b>\n\nThese are the buttons shown below your Referral Message for players:\n\n";
+      const inlineKeyboard: any[] = [];
+      
+      buttons.forEach((row, rIndex) => {
+        const rowButtons: any[] = [];
+        row.forEach((btn, cIndex) => {
+          text += `• Row ${rIndex + 1}, Col ${cIndex + 1}: <b>"${btn.text}"</b>\n`;
+          rowButtons.push({
+            text: `✏️ Row ${rIndex + 1} Col ${cIndex + 1}: ${btn.text}`,
+            callback_data: `edit_refbtn_click_${rIndex}_${cIndex}`
+          });
+        });
+        inlineKeyboard.push(rowButtons);
+      });
+      
+      inlineKeyboard.push([{ text: "➕ Add New Button", callback_data: "edit_refbtn_add" }]);
+      inlineKeyboard.push([{ text: "🔙 Back to Referral", callback_data: "edit_section_referral" }]);
+      
+      if (messageId) {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: { inline_keyboard: inlineKeyboard } });
+      }
+      return;
+    }
+
+    if (data === "control_back") {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      renderMainControlPanel(chatId, messageId);
+      return;
+    }
+    if (data === "control_links") {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      renderCommandLinks(chatId, messageId);
       return;
     }
 
@@ -3336,6 +3658,128 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       return;
     }
 
+    if (data.startsWith("edit_refbtn_click_")) {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      const parts = data.replace("edit_refbtn_click_", "").split("_");
+      const rIndex = parseInt(parts[0], 10);
+      const cIndex = parseInt(parts[1], 10);
+      
+      const btn = promptsConfig.referral_buttons?.[rIndex]?.[cIndex];
+      if (!btn) {
+        return bot.sendMessage(chatId, "❌ Button not found.");
+      }
+      
+      const text = `🤝 <b>Editing Referral Button</b>\n\n` +
+        `• <b>Label:</b> <code>${btn.text}</code>\n` +
+        `• <b>Type:</b> <code>${btn.type}</code>\n` +
+        `• <b>Target Value:</b> <code>${btn.value}</code>\n\n` +
+        `Select an action:`;
+      
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "✏️ Edit Button Label", callback_data: `edit_refbtn_label_${rIndex}_${cIndex}` }],
+          [{ text: "🔗 Edit Share URL", callback_data: `edit_refbtn_url_${rIndex}_${cIndex}` }],
+          [{ text: "❌ Delete Button", callback_data: `edit_refbtn_del_${rIndex}_${cIndex}` }],
+          [{ text: "🔙 Back to Buttons", callback_data: "edit_section_referral_buttons" }]
+        ]
+      };
+      
+      if (messageId) {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard });
+      }
+      return;
+    }
+
+    if (data.startsWith("edit_refbtn_label_")) {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      const parts = data.replace("edit_refbtn_label_", "").split("_");
+      const rIndex = parts[0];
+      const cIndex = parts[1];
+      
+      userStates.set(userId, {
+        step: 'awaiting_refbtn_label_change',
+        row: parseInt(rIndex, 10),
+        col: parseInt(cIndex, 10)
+      });
+      
+      await bot.sendMessage(chatId, `✍️ <b>Enter new label/text for the referral button:</b>\n\nType the text and send it directly.`, { parse_mode: "HTML" });
+      return;
+    }
+
+    if (data.startsWith("edit_refbtn_url_")) {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      const parts = data.replace("edit_refbtn_url_", "").split("_");
+      const rIndex = parts[0];
+      const cIndex = parts[1];
+      
+      userStates.set(userId, {
+        step: 'awaiting_refbtn_url_change',
+        row: parseInt(rIndex, 10),
+        col: parseInt(cIndex, 10)
+      });
+      
+      await bot.sendMessage(chatId, `✍️ <b>Enter the new share URL link:</b>\n\nUse <code>{user_id}</code> and <code>{bot_username}</code> as placeholders if needed.`, { parse_mode: "HTML" });
+      return;
+    }
+
+    if (data.startsWith("edit_refbtn_del_")) {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      const parts = data.replace("edit_refbtn_del_", "").split("_");
+      const rIndex = parseInt(parts[0], 10);
+      const cIndex = parseInt(parts[1], 10);
+      
+      if (promptsConfig.referral_buttons?.[rIndex]) {
+        promptsConfig.referral_buttons[rIndex].splice(cIndex, 1);
+        if (promptsConfig.referral_buttons[rIndex].length === 0) {
+          promptsConfig.referral_buttons.splice(rIndex, 1);
+        }
+        savePromptsConfig(promptsConfig);
+        await bot.sendMessage(chatId, "✅ Referral button deleted successfully!");
+      }
+      
+      await bot.sendMessage(chatId, "🤝 <b>Referral Buttons Main Editor</b>", {
+        reply_markup: {
+          inline_keyboard: [[{ text: "🔙 Back to Buttons Panel", callback_data: "edit_section_referral_buttons" }]]
+        }
+      });
+      return;
+    }
+
+    if (data === "edit_refbtn_add") {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      userStates.set(userId, {
+        step: 'awaiting_refbtn_add_label'
+      });
+      
+      await bot.sendMessage(chatId, `✍️ <b>Enter label/text for the new referral button:</b>\n\nExample: <code>🎁 Invite & Earn</code>`, { parse_mode: "HTML" });
+      return;
+    }
+
     if (data.startsWith("edit_bank_")) {
       if (!adminChatIds.has(parseInt(userId, 10))) {
         bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
@@ -3376,7 +3820,33 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
         editingKey: key
       });
 
-      const section = key.startsWith("withdraw") ? "edit_section_withdrawal" : "edit_section_deposit";
+      let section = "control_edit";
+      if (key.startsWith("withdraw")) section = "edit_section_withdrawal";
+      else if (key.startsWith("deposit") || key === "support_text") section = "edit_section_deposit";
+      else if (key === "referral_msg" || key === "referral_image" || key === "referral_share_text" || key === "referral_share_image") section = "edit_section_referral";
+      else if (key.startsWith("welcome") || key === "support_card_msg") section = "edit_section_welcome";
+
+      if (key === 'referral_image' || key === 'referral_share_image' || key === 'welcome_image' || key === 'welcome_guest_image') {
+        let title = "Editing Image";
+        if (key === 'referral_image') title = "Referral Image";
+        else if (key === 'referral_share_image') title = "Referral Share Image";
+        else if (key === 'welcome_image') title = "Welcome Image (Registered)";
+        else if (key === 'welcome_guest_image') title = "Welcome Image (Guest)";
+
+        const text = `🖼️ <b>Editing ${title}</b>\n\n` +
+          `<b>Current File ID:</b> <code>${currentVal || 'None'}</code>\n\n` +
+          `<i>Please send a PHOTO to update the image, or send <code>none</code> to remove it.</i>`;
+        const keyboard = {
+          inline_keyboard: [
+            [{ text: "❌ Cancel", callback_data: section }]
+          ]
+        };
+        if (messageId) {
+          await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard });
+        }
+        return;
+      }
+
       const text = `✍️ <b>Editing Prompt Key:</b> <code>${key}</code>\n\n` +
         `<b>Current Value:</b>\n` +
         `<pre>${currentVal}</pre>\n\n` +

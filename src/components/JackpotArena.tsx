@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Trophy, Coins, Lock, Sparkles, RefreshCw, AlertTriangle, Zap, Flame, Crown, Eye } from 'lucide-react';
+import { Trophy, Coins, Lock, Sparkles, RefreshCw, AlertTriangle, Zap, Flame, Crown, Eye, ArrowLeft } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { OdometerCanvas } from './OdometerCanvas';
 
@@ -11,6 +11,7 @@ interface JackpotArenaProps {
   isDarkMode: boolean;
   soundTicks: boolean;
   onTheaterModeChange?: (active: boolean) => void;
+  onBack?: () => void;
   socket?: any;
   userId?: string;
 }
@@ -30,6 +31,7 @@ export function JackpotArena({
   isDarkMode,
   soundTicks,
   onTheaterModeChange,
+  onBack,
   socket,
   userId
 }: JackpotArenaProps) {
@@ -62,13 +64,44 @@ export function JackpotArena({
   // Neon Blitz dynamic active index
   const [blitzActiveTile, setBlitzActiveTile] = useState<number | null>(null);
   const isMounted = useRef<boolean>(true);
+  // Timer management to prevent memory leaks/stuck state on unmount
+  const activeTimers = useRef<NodeJS.Timeout[]>([]);
+  const clearAllTimers = () => {
+    activeTimers.current.forEach(timer => clearTimeout(timer));
+    activeTimers.current = [];
+  };
 
   useEffect(() => {
     isMounted.current = true;
     return () => {
       isMounted.current = false;
+      clearAllTimers();
     };
   }, []);
+
+  // Wrap setTimeout to track it
+  const trackTimeout = (fn: Function, delay: number) => {
+    const id = setTimeout(() => {
+      if (!isMounted.current) return;
+      fn();
+      activeTimers.current = activeTimers.current.filter(t => t !== id);
+    }, delay);
+    activeTimers.current.push(id);
+    return id;
+  };
+
+  // Wrap setInterval to track it
+  const trackInterval = (fn: Function, delay: number) => {
+    const id = setInterval(() => {
+      if (!isMounted.current) {
+        clearInterval(id);
+        return;
+      }
+      fn();
+    }, delay);
+    activeTimers.current.push(id as unknown as NodeJS.Timeout);
+    return id;
+  };
 
   // Current winner selected to spin
   const [currentWinner, setCurrentWinner] = useState<number | null>(null);
@@ -95,6 +128,11 @@ export function JackpotArena({
         gamePhase === 'complete'
       );
     }
+    return () => {
+      if (onTheaterModeChange) {
+        onTheaterModeChange(false);
+      }
+    };
   }, [gamePhase, onTheaterModeChange]);
 
   // Sound generator
@@ -134,10 +172,58 @@ export function JackpotArena({
 
   // Populate grids initially with 65% filled
   useEffect(() => {
-    resetLobby();
+    const savedState = sessionStorage.getItem('jackpotArenaState');
+    if (savedState) {
+      try {
+        const state = JSON.parse(savedState);
+        setGamePhase(state.gamePhase);
+        setDrawNumber(state.drawNumber);
+        setWinners(state.winners);
+        setVaporizedSlots(state.vaporizedSlots);
+        setTargetGrid(state.grid);
+        setTier(state.tier);
+      } catch (e) {
+        resetLobby();
+      }
+    } else {
+      resetLobby();
+    }
   }, [tier]);
 
+  // Persist state
+  useEffect(() => {
+    sessionStorage.setItem('jackpotArenaState', JSON.stringify({
+      gamePhase,
+      drawNumber,
+      winners,
+      vaporizedSlots,
+      grid: activeGrid,
+      tier
+    }));
+  }, [gamePhase, drawNumber, winners, vaporizedSlots, activeGrid, tier]);
+
+  // Recover interrupted game phases
+  useEffect(() => {
+    if (activeTimers.current.length === 0) {
+      if (gamePhase === 'drawing') {
+        executeSequentialDraw(drawNumber);
+      } else if (gamePhase === 'winner' || gamePhase === 'vaporizing') {
+        // Fast forward to next step
+        if (drawNumber < 3) {
+          executeSequentialDraw((drawNumber + 1) as 2 | 3);
+        } else {
+          setGamePhase('complete');
+          trackTimeout(() => resetLobby(), 6000);
+        }
+      } else if (gamePhase === 'complete') {
+        trackTimeout(() => resetLobby(), 6000);
+      }
+    }
+  }, [gamePhase]);
+
   const resetLobby = () => {
+    sessionStorage.removeItem('odometerStartTime');
+    sessionStorage.removeItem('jackpotArenaState');
     setTargetGrid({});
     setGamePhase('lobby');
     setDrawNumber(1);
@@ -162,7 +248,7 @@ export function JackpotArena({
       return;
     }
 
-    const timer = setTimeout(() => {
+    const timer = trackTimeout(() => {
       setFreezeCountdown(prev => prev - 1);
       playHapticAudio(300);
     }, 1000);
@@ -235,16 +321,16 @@ export function JackpotArena({
         setBlitzActiveTile(finalWinner);
         playHapticAudio(900);
         if (tier === 'mini') {
-          setTimeout(() => {
+          trackTimeout(() => {
             finalizeDrawWinner(finalWinner, drawIndex);
           }, 1000);
         }
       } else {
-        setTimeout(step, currentDelay);
+        trackTimeout(step, currentDelay);
       }
     };
 
-    setTimeout(step, currentDelay);
+    trackTimeout(step, currentDelay);
   };
 
   // 3-Digit Mechanical Reels loop
@@ -262,7 +348,7 @@ export function JackpotArena({
     let spinsCount = 0;
     
     // Rapid reel shuffle interval (fast phase)
-    const shuffleInterval = setInterval(() => {
+    const shuffleInterval = trackInterval(() => {
       if (hundredsSpinning) setReelHundred(Math.round(Math.random()).toString());
       if (tensSpinning) setReelTen(Math.floor(Math.random() * 10).toString());
       if (onesSpinning) setReelOne(Math.floor(Math.random() * 10).toString());
@@ -288,7 +374,7 @@ export function JackpotArena({
         playHapticAudio(900);
 
         // Announce winner
-        setTimeout(() => {
+        trackTimeout(() => {
           finalizeDrawWinner(finalWinner, drawIndex);
         }, 500);
       }
@@ -331,7 +417,7 @@ export function JackpotArena({
     }
 
     // Wait 5 seconds, then vaporize this slot to proceed to the next slot draw
-    setTimeout(() => {
+    trackTimeout(() => {
       setBlitzActiveTile(null);
       
       if (drawIndex < 3) {
@@ -339,7 +425,7 @@ export function JackpotArena({
         setVaporizedSlots(prev => [...prev, winnerNum]);
         
         // Wait 2.5 seconds in vaporization phase, then proceed
-        setTimeout(() => {
+        trackTimeout(() => {
           executeSequentialDraw((drawIndex + 1) as 2 | 3);
         }, 2200);
       } else {
@@ -347,7 +433,7 @@ export function JackpotArena({
         setGamePhase('complete');
         
         // Wait 6 seconds and restart the lobby
-        setTimeout(() => {
+        trackTimeout(() => {
           resetLobby();
         }, 6000);
       }
@@ -410,6 +496,14 @@ export function JackpotArena({
 
   return (
     <div className="flex-1 flex flex-col justify-start">
+      {onBack && (
+        <button
+          onClick={onBack}
+          className="absolute top-4 left-4 z-50 p-2 bg-zinc-800 rounded-full text-white"
+        >
+          <ArrowLeft className="w-5 h-5" />
+        </button>
+      )}
       
 
       

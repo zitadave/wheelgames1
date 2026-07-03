@@ -516,6 +516,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
     const systemCommands = [
       { command: "start", description: "Launch the game hub and display menu" },
       { command: "play", description: "Launch the Web App immediately" },
+      { command: "balance", description: "Check your current wallet balance" },
       { command: "deposit", description: "Deposit ETB into your balance" },
       { command: "withdraw", description: "Withdraw ETB from your balance" },
       { command: "support", description: "Show contact support details" },
@@ -819,6 +820,32 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
   bot.onText(/\/withdraw/, async (msg) => {
     await checkRegisteredAndHandle(msg, () => {
       if (msg.from?.id) startWithdrawalFlow(msg.chat.id, msg.from.id.toString());
+    });
+  });
+
+  bot.onText(/\/balance/, async (msg) => {
+    await checkRegisteredAndHandle(msg, async () => {
+      const chatId = msg.chat.id;
+      const userId = msg.from?.id?.toString();
+      if (!userId) return;
+
+      try {
+        const { data, error } = await supabase.from('users').select('balance').eq('id', userId).single();
+        if (error) {
+          bot.sendMessage(chatId, "⚠️ *Error retrieving balance.*", { parse_mode: "Markdown" });
+          return;
+        }
+
+        const balanceVal = data ? Number(data.balance) : 0;
+        const msgText = `💵 *Your Current Balance / የሂሳብዎ መጠን:*\n\n` +
+          `💰 *${balanceVal.toLocaleString()} ETB*\n\n` +
+          `🎮 _Play inside the web app and keep winning!_`;
+
+        bot.sendMessage(chatId, msgText, { parse_mode: "Markdown" });
+      } catch (err: any) {
+        logBot(`Error in /balance handler: ${err.message}`);
+        bot.sendMessage(chatId, "⚠️ *Error retrieving balance.*", { parse_mode: "Markdown" });
+      }
     });
   });
 
@@ -3127,6 +3154,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
             const systemCommands = [
               { command: "start", description: "Launch the game hub and display menu" },
               { command: "play", description: "Launch the Web App immediately" },
+              { command: "balance", description: "Check your current wallet balance" },
               { command: "deposit", description: "Deposit ETB into your balance" },
               { command: "withdraw", description: "Withdraw ETB from your balance" },
               { command: "support", description: "Show contact support details" },

@@ -7,11 +7,13 @@ interface WheelProps {
   status: "betting" | "balancing" | "spinning" | "result";
   winner?: number;
   soundTicks: boolean;
+  timeLeft?: number;
 }
 
-export const Wheel = React.memo(function Wheel({ status, winner, soundTicks }: WheelProps) {
-  const rotate = useMotionValue(0);
-  const prevStatus = useRef(status);
+export const Wheel = React.memo(function Wheel({ status, winner, soundTicks, timeLeft }: WheelProps) {
+  const [initialRotate] = React.useState(() => Number(sessionStorage.getItem('wheelRotation') || 0));
+  const rotate = useMotionValue(initialRotate);
+  const prevStatus = useRef<string | null>(null);
   const lastTickSegment = useRef(0);
   const lastTickTime = useRef(0);
   const soundTicksRef = useRef(soundTicks);
@@ -28,8 +30,10 @@ export const Wheel = React.memo(function Wheel({ status, winner, soundTicks }: W
       const targetIndex = orderAtTop.indexOf(winner);
       // Introduce a realistic random landing offset within the slice (-20 to +20 deg) to keep suspense alive!
       const randomOffset = (Math.random() - 0.5) * 40;
-      // Accelerates rapidly and covers plenty of distance
-      const targetRotation = 360 * 80 + (targetIndex * 60) + randomOffset; 
+      
+      const duration = timeLeft !== undefined && timeLeft > 0 ? timeLeft : 60;
+      const spins = Math.max(Math.floor(duration * 1.3), 5); // Roughly 1.3 spins per second left
+      const targetRotation = 360 * spins + (targetIndex * 60) + randomOffset; 
 
       // Launch haptic and sound
       triggerHaptic('impact', 'heavy');
@@ -38,11 +42,12 @@ export const Wheel = React.memo(function Wheel({ status, winner, soundTicks }: W
       const currentRot = rotate.get() % 360;
       rotate.set(currentRot);
       
-      // Extremely rapid launch [0.05, 0.95, 0.05, 1.0] and smooth, heavy deceleration over 60 seconds
+      // Extremely rapid launch [0.05, 0.95, 0.05, 1.0] and smooth, heavy deceleration
       animationControls = animate(rotate, targetRotation, {
-        duration: 60,
+        duration: duration,
         ease: [0.05, 0.95, 0.05, 1.0],
         onUpdate: (latest) => {
+          sessionStorage.setItem('wheelRotation', latest.toString());
           const currentSegment = Math.floor((latest + 30) / 60);
           if (currentSegment !== lastTickSegment.current) {
             const now = Date.now();
@@ -66,6 +71,27 @@ export const Wheel = React.memo(function Wheel({ status, winner, soundTicks }: W
       rotate.set(currentRot);
     } else if (status === 'result') {
       // Resting on result
+      if (winner) {
+        const orderAtTop = [1, 6, 5, 4, 3, 2];
+        const targetIndex = orderAtTop.indexOf(winner);
+        const baseTarget = targetIndex * 60;
+        
+        const currentRot = rotate.get();
+        const normalized = ((currentRot % 360) + 360) % 360;
+        const currentSegment = Math.floor(((normalized + 30) % 360) / 60);
+        
+        if (currentSegment !== targetIndex) {
+          let targetRotation = currentRot - normalized + baseTarget;
+          if (targetRotation < currentRot) {
+            targetRotation += 360;
+          }
+          animationControls = animate(rotate, targetRotation, {
+            duration: 0.8,
+            ease: "easeOut",
+            onUpdate: (latest) => sessionStorage.setItem('wheelRotation', latest.toString())
+          });
+        }
+      }
     }
     prevStatus.current = status;
 

@@ -37,11 +37,60 @@ export function WheelOfChance({
   const [phase, setPhase] = useState<GamePhase>('lobby');
   const [countdown, setCountdown] = useState<number>(5);
   const [claimedSlots, setClaimedSlots] = useState<{ [key: number]: { isSelf: boolean; username: string } }>({});
-  const [activeSectors, setActiveSectors] = useState<number[]>([]);
+  const [activeSectors, setActiveSectors] = useState<number[]>(() => {
+    const saved = sessionStorage.getItem(`wheelOfChanceState_${activeRoom}`);
+    if (saved) {
+      try {
+        const state = JSON.parse(saved);
+        if (state.activeSectors && state.activeSectors.length > 0) return state.activeSectors;
+      } catch (e) {}
+    }
+    return [];
+  });
   const [currentDraw, setCurrentDraw] = useState<1 | 2 | 3>(1);
   const [winners, setWinners] = useState<{ 1?: number; 2?: number; 3?: number }>({});
   const [justDrawnWinner, setJustDrawnWinner] = useState<number | null>(null);
   const [statusFilament, setStatusFilament] = useState<string>('• Room open. Reserve your ticket to start...');
+
+  // Restore state on mount
+  useEffect(() => {
+    const savedState = sessionStorage.getItem(`wheelOfChanceState_${activeRoom}`);
+    if (savedState) {
+      try {
+        const state = JSON.parse(savedState);
+        setPhase(state.phase);
+        setCountdown(state.countdown);
+        setClaimedSlots(state.claimedSlots);
+        setActiveSectors(state.activeSectors);
+        setCurrentDraw(state.currentDraw);
+        setWinners(state.winners);
+        setJustDrawnWinner(state.justDrawnWinner);
+        setStatusFilament(state.statusFilament);
+        if (state.rotation) {
+          rotationRef.current = state.rotation;
+        }
+      } catch (e) {
+        resetRoom();
+      }
+    } else {
+      resetRoom();
+    }
+  }, [activeRoom]);
+
+  // Persist state
+  useEffect(() => {
+    sessionStorage.setItem(`wheelOfChanceState_${activeRoom}`, JSON.stringify({
+      phase,
+      countdown,
+      claimedSlots,
+      activeSectors,
+      currentDraw,
+      winners,
+      justDrawnWinner,
+      statusFilament,
+      rotation: rotationRef.current
+    }));
+  }, [phase, countdown, claimedSlots, activeSectors, currentDraw, winners, justDrawnWinner, statusFilament, activeRoom]);
 
   // Wheel animation references
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -109,12 +158,8 @@ export function WheelOfChance({
     };
   }, []);
 
-  // Initialize slots when switching room
-  useEffect(() => {
-    resetRoom();
-  }, [activeRoom]);
-
   const resetRoom = () => {
+    sessionStorage.removeItem(`wheelOfChanceState_${activeRoom}`);
     rotationRef.current = 0;
     isSpinningRef.current = false;
     if (animationFrameRef.current) {
@@ -134,6 +179,7 @@ export function WheelOfChance({
 
 
   const startCountdown = () => {
+    if (!isMounted.current) return;
     setPhase('countdown');
     setCountdown(10);
     setActiveSectors(Array.from({ length: maxSlots }, (_, i) => i + 1));
@@ -145,6 +191,7 @@ export function WheelOfChance({
 
     if (countdown > 0) {
       const timer = setTimeout(() => {
+        if (!isMounted.current) return;
         setCountdown(prev => prev - 1);
         playBeep(580, 0.1, 'sine');
         setStatusFilament(`• All slots claimed! Drawing starting in ${countdown}s...`);
@@ -206,13 +253,24 @@ export function WheelOfChance({
       playBeep(880, 0.12, 'sine');
 
       if (count === maxSlots) {
-        setTimeout(startCountdown, 300);
+        setTimeout(() => {
+          if (!isMounted.current) return;
+          startCountdown();
+        }, 300);
       } else {
         setStatusFilament(`• Slot #${num} claimed. ${count}/${maxSlots} filled...`);
       }
       return next;
     });
   };
+
+  // Recover spinning state if interrupted
+  useEffect(() => {
+    if (phase === 'spinning' && !isSpinningRef.current) {
+      // It was interrupted! Let's resume by calling the draw function again
+      drawWinnerForCurrentTier();
+    }
+  }, [phase]);
 
   // Sequential Drawing Engine
   const drawWinnerForCurrentTier = (sectorsOverride?: number[], drawTierOverride?: number) => {
@@ -277,6 +335,7 @@ export function WheelOfChance({
         
         // Wait 1.5s to allow the final frame to render and look fully stopped before announcement
         setTimeout(() => {
+          if (!isMounted.current) return;
           setPhase('announcing');
         }, 1500);
 
@@ -309,7 +368,10 @@ export function WheelOfChance({
             ...prev
           ]);
           playBeep(880, 0.4, 'sine');
-          setTimeout(() => playBeep(1320, 0.4, 'sine'), 120);
+          setTimeout(() => {
+            if (!isMounted.current) return;
+            playBeep(1320, 0.4, 'sine');
+          }, 120);
         } else {
           playBeep(523, 0.25, 'sine');
         }
@@ -318,6 +380,7 @@ export function WheelOfChance({
 
         // Wait 5 seconds for announcement display, then evict the sector and proceed immediately
         setTimeout(() => {
+          if (!isMounted.current) return;
           // Evict the winning slot
           const remaining = currentSectors.filter(s => s !== winningSectorVal);
           setActiveSectors(remaining);
@@ -331,11 +394,13 @@ export function WheelOfChance({
             const nextDraw = (thisDraw + 1) as 1 | 2 | 3;
             setCurrentDraw(nextDraw);
             setTimeout(() => {
+              if (!isMounted.current) return;
               drawWinnerForCurrentTier(remaining, nextDraw);
             }, 500);
           } else {
             // New round starts immediately as requested!
             setTimeout(() => {
+              if (!isMounted.current) return;
               resetRoom();
             }, 500);
           }

@@ -4,10 +4,10 @@ import { RoomState, Side } from './types';
 import { Wheel } from './components/Wheel';
 import { JackpotArena } from './components/JackpotArena';
 import { WheelOfChance } from './components/WheelOfChance';
-import { Users, Clock, History, AlertCircle, Coins, Moon, Sun, Settings, X, HelpCircle, Search, Trophy, Gamepad2, TrendingUp, Wallet, User, Plus, ArrowUpRight, ArrowDownLeft, Copy, Check, ChevronRight, Dices } from 'lucide-react';
+import { Users, Clock, History, AlertCircle, Coins, Moon, Sun, Settings, X, HelpCircle, Search, Trophy, Gamepad2, TrendingUp, Wallet, User, Plus, ArrowUpRight, ArrowDownLeft, Copy, Check, ChevronRight, Dices, Binary } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import confetti from 'canvas-confetti';
-import { playWin, playLoss } from './utils/sound';
+import { playWin, playLoss, suspendAudio, resumeAudio } from './utils/sound';
 import { triggerHaptic } from './utils/haptic';
 
 const BACKEND_URL = (import.meta as any).env?.VITE_BACKEND_URL || window.location.origin;
@@ -43,7 +43,10 @@ export default function App() {
   const [balance, setBalance] = useState(100000); // 100k start
   const [currentRoom, setCurrentRoom] = useState<string>('Main-Room');
   const [roomsStatus, setRoomsStatus] = useState<Record<string, { status: string, even: number, odd: number }>>({});
-  const [roomState, setRoomState] = useState<RoomState | null>(null);
+  const [roomState, setRoomState] = useState<RoomState | null>(() => {
+    const saved = sessionStorage.getItem('roomState');
+    return saved ? JSON.parse(saved) : null;
+  });
 
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [failedBet, setFailedBet] = useState<{ side: Side; amount: number } | null>(null);
@@ -89,6 +92,18 @@ export default function App() {
     }, 4000);
     return () => clearTimeout(timer);
   }, [notification]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        suspendAudio();
+      } else {
+        resumeAudio();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
 
   const [betAmount, setBetAmount] = useState<number>(1000);
   const [partialBet, setPartialBet] = useState<boolean>(true);
@@ -259,6 +274,7 @@ export default function App() {
     
     socket.on('roomState', (state: RoomState) => {
       setRoomState(state);
+      sessionStorage.setItem('roomState', JSON.stringify(state));
 
       if (state.status === 'result' && state.winner) {
         if (!showResult && lastWinner !== state.winner) {
@@ -552,22 +568,15 @@ export default function App() {
 
         {/* Scrollable Main Content Frame */}
         <main className={`flex-1 overflow-y-auto relative z-10 flex flex-col px-4 transition-all duration-300 ${isJackpotTheaterMode ? 'pt-4 pb-4' : 'pt-[52px] pb-[62px]'}`}>
-          <AnimatePresence mode="wait">
             
             {/* TAB 1: Game Arena (Even/Odd) */}
-            {activeTab === 'even_odd' && (
-              <motion.div
-                key="even_odd_tab"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.2 }}
-                className="flex-1 flex flex-col justify-between py-4"
-              >
-                {/* Wheel Canvas & Quick Arena Label */}
-                <div className="relative mx-auto flex flex-col items-center my-auto">
-                  <Wheel status={roomState?.status || 'betting'} winner={roomState?.winner} soundTicks={soundTicks} />
-                </div>
+            <div
+              className={`flex-1 flex-col justify-between py-4 ${activeTab === 'even_odd' ? 'flex' : 'hidden'}`}
+            >
+              {/* Wheel Canvas & Quick Arena Label */}
+              <div className="relative mx-auto flex flex-col items-center my-auto">
+                <Wheel status={roomState?.status || 'betting'} winner={roomState?.winner} soundTicks={soundTicks} timeLeft={roomState?.timeLeft} />
+              </div>
 
                 {/* Result Announcement Overlay */}
                 {showResult && roomState?.winner && (
@@ -718,19 +727,10 @@ export default function App() {
                     </div>
                   )}
                 </div>
-              </motion.div>
-            )}
-
+            </div>
+            
             {/* TAB 1.5: High-Stakes Jackpot Systems */}
-            {activeTab === 'jackpot' && (
-              <motion.div
-                key="jackpot_tab"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.2 }}
-                className="flex-1 flex flex-col"
-              >
+            <div className={`flex-1 flex-col ${activeTab === 'jackpot' ? 'flex' : 'hidden'}`}>
                 <JackpotArena
                   balance={balance}
                   setBalance={setBalance}
@@ -739,22 +739,14 @@ export default function App() {
                   isDarkMode={isDarkMode}
                   soundTicks={soundTicks}
                   onTheaterModeChange={setIsJackpotTheaterMode}
+                  onBack={() => setActiveTab('even_odd')}
                   socket={socket}
                   userId={userId}
                 />
-              </motion.div>
-            )}
+            </div>
 
             {/* TAB 2: P2P Wheel of Chance Page (Ultra-Clean UI/UX Spec) */}
-            {activeTab === 'chance' && (
-              <motion.div
-                key="chance_tab"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.2 }}
-                className="flex-1 flex flex-col"
-              >
+            <div className={`flex-1 flex-col ${activeTab === 'chance' ? 'flex' : 'hidden'}`}>
                 <WheelOfChance
                   balance={balance}
                   setBalance={setBalance}
@@ -765,21 +757,12 @@ export default function App() {
                   socket={socket}
                   userId={userId}
                 />
-              </motion.div>
-            )}
+            </div>
 
 
 
             {/* TAB 4: Profile Page */}
-            {activeTab === 'profile' && (
-              <motion.div
-                key="profile_tab"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.2 }}
-                className="flex-1 p-4 space-y-4"
-              >
+            <div className={`flex-1 p-4 space-y-4 ${activeTab === 'profile' ? 'block' : 'hidden'}`}>
                 {/* User Info Card */}
                 <div className="bg-white dark:bg-gray-900 rounded-2xl p-4 border border-gray-200 dark:border-gray-800 transition-colors text-center shadow-xs">
                   <div className="relative mx-auto w-16 h-16 rounded-full bg-blue-600 flex items-center justify-center font-bold text-2xl text-white shadow-md overflow-hidden">
@@ -882,10 +865,8 @@ export default function App() {
                     <HelpCircle className="w-4 h-4" /> Open How to Play Tutorial
                   </button>
                 </div>
-              </motion.div>
-            )}
+            </div>
 
-          </AnimatePresence>
         </main>
 
         {/* Modern Bottom Tabbed Menu Bar */}
@@ -899,7 +880,7 @@ export default function App() {
                   : 'text-gray-400 hover:text-gray-500'
               }`}
             >
-              <Dices className="w-5 h-5" />
+              <Binary className="w-5 h-5" />
               <span className="text-[10px] tracking-tight font-black uppercase">ሞላ/ጎደለ</span>
             </button>
 
@@ -923,7 +904,7 @@ export default function App() {
                   : 'text-gray-400 hover:text-gray-500'
               }`}
             >
-              <Gamepad2 className="w-5 h-5" />
+              <Dices className="w-5 h-5" />
               <span className="text-[10px] tracking-tight font-black uppercase">ፈጣን</span>
             </button>
           </nav>

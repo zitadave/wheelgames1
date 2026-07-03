@@ -1,5 +1,13 @@
 const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
 
+export function suspendAudio() {
+  if (audioCtx.state !== 'suspended') audioCtx.suspend();
+}
+
+export function resumeAudio() {
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
 export function playTick() {
   if (audioCtx.state === 'suspended') audioCtx.resume();
   const osc = audioCtx.createOscillator();

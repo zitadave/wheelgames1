@@ -56,7 +56,12 @@ export function OdometerCanvas({
     canvas.width = width;
     canvas.height = height;
 
-    const startTime = Date.now();
+    let startTime = Number(sessionStorage.getItem('odometerStartTime'));
+    if (!startTime || startTime === 0 || Date.now() - startTime > duration * 1000) {
+      startTime = Date.now();
+      sessionStorage.setItem('odometerStartTime', startTime.toString());
+    }
+    
     let animationId: number;
     let completedTriggered = false;
 

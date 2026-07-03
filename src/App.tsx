@@ -4,7 +4,7 @@ import { RoomState, Side } from './types';
 import { Wheel } from './components/Wheel';
 import { JackpotArena } from './components/JackpotArena';
 import { WheelOfChance } from './components/WheelOfChance';
-import { Users, Clock, History, AlertCircle, Coins, Moon, Sun, Settings, X, HelpCircle, Search, Trophy, Gamepad2, TrendingUp, Wallet, User, Plus, ArrowUpRight, ArrowDownLeft, Copy, Check, ChevronRight, Dices, Binary } from 'lucide-react';
+import { Users, Clock, History, AlertCircle, Coins, Moon, Sun, Settings, X, HelpCircle, Search, Trophy, Gamepad2, TrendingUp, Wallet, User, Plus, ArrowUpRight, ArrowDownLeft, Copy, Check, ChevronRight, Dices, Binary, RefreshCw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import confetti from 'canvas-confetti';
 import { playWin, playLoss, suspendAudio, resumeAudio } from './utils/sound';
@@ -16,9 +16,9 @@ const SOCKET_URL = BACKEND_URL;
 interface HistoryItem {
   roundId: number;
   winner: number;
-  betAmount: number;
-  betSide: Side;
-  netWin: number;
+  betAmount?: number;
+  betSide?: Side;
+  netWin?: number;
 }
 
 const getTelegramUser = () => {
@@ -137,6 +137,7 @@ export default function App() {
   const [isJackpotTheaterMode, setIsJackpotTheaterMode] = useState<boolean>(false);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [gameHistory, setGameHistory] = useState<any[]>([]);
+  const [historyFilter, setHistoryFilter] = useState<string>('all');
 
   const [botUsername, setBotUsername] = useState<string>('');
   const [copiedId, setCopiedId] = useState<boolean>(false);
@@ -158,7 +159,7 @@ export default function App() {
       });
   }, []);
 
-  const totalActivePlayersCount = (roomState ? Object.keys(roomState.players).length : 0);
+  const totalActivePlayersCount = roomState?.onlineCount || (roomState ? Object.keys(roomState.players).length + 12 : 12);
 
   const vipPlayersList = React.useMemo(() => {
     const realPlayers = roomState?.players || {};
@@ -232,6 +233,7 @@ export default function App() {
         setBalance(data.balance);
         showNotification(`Wallet updated to ${data.balance.toLocaleString()} ETB`, 'success');
         socket.emit('getUserTransactions', userId);
+        socket.emit('getUserGameLogs', userId);
       }
     });
 
@@ -248,17 +250,56 @@ export default function App() {
     });
 
     socket.on('userGameLogs', (data: any[]) => {
-      const formatted = data.map(log => ({
-        id: log.id.slice(0, 8).toUpperCase(),
-        type: log.game_type,
-        bet: 0, // We didn't log bet specifically in game_logs for now, maybe derive or leave 0
-        numbers: '-',
-        result: log.result,
-        change: log.win_amount,
-        date: new Date(log.created_at).toLocaleString(),
-        status: 'Completed'
-      }));
+      const formatted = data.map(log => {
+        let rawType = log.game_type || '';
+        let gameType = rawType;
+        let roundId = log.id.slice(0, 8).toUpperCase();
+        let playerChoice = '-';
+        let winningNums = '-';
+        
+        if (rawType.includes(' | ')) {
+          const parts = rawType.split(' | ');
+          gameType = parts[0];
+          for (const part of parts) {
+            const trimmed = part.trim();
+            if (trimmed.startsWith('R#')) {
+              roundId = trimmed;
+            } else if (trimmed.startsWith('Choice:')) {
+              playerChoice = trimmed.substring(7);
+            } else if (trimmed.startsWith('WinNum:')) {
+              winningNums = trimmed.substring(7);
+            }
+          }
+        }
+
+        let guessedBet = 0;
+        const gLower = gameType.toLowerCase();
+        if (gLower.includes('1-10')) guessedBet = 500;
+        else if (gLower.includes('1-20')) guessedBet = 1000;
+        else if (gLower.includes('mini')) guessedBet = 1000;
+        else if (gLower.includes('grand')) guessedBet = 2000;
+
+        return {
+          id: roundId,
+          type: gameType,
+          bet: guessedBet,
+          numbers: playerChoice,
+          winningNums: winningNums,
+          result: log.result,
+          change: log.win_amount,
+          date: new Date(log.created_at).toLocaleString(),
+          status: 'Completed'
+        };
+      });
       setGameHistory(formatted);
+    });
+
+    socket.on('recentRounds', (roundsData: any[]) => {
+      const mappedHistory: HistoryItem[] = roundsData.map((r: any) => ({
+        roundId: r.round_number,
+        winner: r.winner,
+      }));
+      setHistory(mappedHistory);
     });
 
     return () => {
@@ -266,6 +307,7 @@ export default function App() {
       socket.off('syncBalance');
       socket.off('userTransactions');
       socket.off('userGameLogs');
+      socket.off('recentRounds');
     };
   }, [socket, currentRoom, userId, username]);
 
@@ -304,41 +346,73 @@ export default function App() {
              const isEven = state.winner % 2 === 0;
              const mySideWon = (isEven && myBet.side === 'even') || (!isEven && myBet.side === 'odd');
              let netWin = -myBet.amount;
+             const choiceStr = myBet.side === 'even' ? 'ሞላ (Even)' : 'ጎደለ (Odd)';
+             const winNumStr = `${state.winner} (${isEven ? 'Even' : 'Odd'})`;
              if (mySideWon) {
                 // Determine net win based on fees
                 const feeRate = myBet.amount > 10000 ? 0.05 : 0.10;
                 netWin = myBet.amount * (1 - feeRate);
                 setBalance(b => {
                   const newBalance = b + myBet.amount + netWin;
-                  socket?.emit('logGamePlay', { userId, gameType: 'Even/Odd', result: 'Win', winAmount: myBet.amount + netWin, newBalance });
+                  socket?.emit('logGamePlay', { userId, gameType: `Even/Odd | R#${state.roundId} | Choice:${choiceStr} | WinNum:${winNumStr}`, result: 'Win', winAmount: myBet.amount + netWin, newBalance });
                   socket?.emit('logTransaction', { userId, amount: myBet.amount + netWin, type: 'win', description: 'Even/Odd Win', newBalance });
                   return newBalance;
                 });
+                setGameHistory(prev => [
+                  {
+                    id: `R#${state.roundId}`,
+                    type: 'Even/Odd',
+                    bet: myBet.amount,
+                    numbers: choiceStr,
+                    winningNums: winNumStr,
+                    date: new Date().toLocaleString(),
+                    result: 'Win',
+                    change: myBet.amount + netWin,
+                    status: 'Completed'
+                  },
+                  ...prev
+                ]);
                 if (soundAlertsRef.current) {
                    if (isActive) playWin();
                  }
              } else {
                 setBalance(b => {
-                  socket?.emit('logGamePlay', { userId, gameType: 'Even/Odd', result: 'Loss', winAmount: 0, newBalance: b });
+                  socket?.emit('logGamePlay', { userId, gameType: `Even/Odd | R#${state.roundId} | Choice:${choiceStr} | WinNum:${winNumStr}`, result: 'Loss', winAmount: 0, newBalance: b });
                   return b;
                 });
+                setGameHistory(prev => [
+                  {
+                    id: `R#${state.roundId}`,
+                    type: 'Even/Odd',
+                    bet: myBet.amount,
+                    numbers: choiceStr,
+                    winningNums: winNumStr,
+                    date: new Date().toLocaleString(),
+                    result: 'Loss',
+                    change: 0,
+                    status: 'Completed'
+                  },
+                  ...prev
+                ]);
                 if (soundAlertsRef.current) {
                    if (isActive) playLoss();
                  }
              }
-
-             setHistory(prev => {
-                if (prev.some(h => h.roundId === state.roundId)) return prev;
-                const newItem: HistoryItem = { 
-                   roundId: state.roundId, 
-                   winner: state.winner!, 
-                   betAmount: myBet.amount, 
-                   betSide: myBet.side, 
-                   netWin 
-                };
-                return [newItem, ...prev].slice(0, 5);
-             });
           }
+
+          setHistory(prev => {
+             if (prev.some(h => h.roundId === state.roundId)) return prev;
+             const isEven = state.winner! % 2 === 0;
+             const myBet = state.players[userId];
+             const newItem: HistoryItem = { 
+                roundId: state.roundId, 
+                winner: state.winner!, 
+                betAmount: myBet ? myBet.amount : undefined, 
+                betSide: myBet ? myBet.side : undefined, 
+                netWin: myBet ? (isEven === (myBet.side === 'even') ? myBet.amount * (1 - (myBet.amount > 10000 ? 0.05 : 0.10)) : -myBet.amount) : undefined
+             };
+             return [newItem, ...prev].slice(0, 10);
+          });
         }
       } else {
         setShowResult(false);
@@ -515,22 +589,18 @@ export default function App() {
 
             {/* Top-Right: Live counting badge & Profile */}
             <div className="flex items-center gap-2">
-              {roomState?.status !== 'spinning' && roomState?.status !== 'result' ? (
-                <button 
-                  id="players-portal-btn-top"
-                  onClick={() => setIsPlayersDrawerOpen(true)}
-                  className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-100 rounded-full px-2.5 py-1.5 border border-gray-200 dark:border-gray-700 text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer animate-in fade-in duration-300"
-                >
-                  <span className="flex h-2 w-2 relative">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-                  </span>
-                  <Users className="w-3.5 h-3.5 text-blue-500 dark:text-blue-400" />
-                  <span className="font-mono tracking-tight font-bold">{totalActivePlayersCount}</span>
-                </button>
-              ) : (
-                <div className="w-[60px]" />
-              )}
+              <button 
+                id="players-portal-btn-top"
+                onClick={() => setIsPlayersDrawerOpen(true)}
+                className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-100 rounded-full px-2.5 py-1.5 border border-gray-200 dark:border-gray-700 text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer animate-in fade-in duration-300"
+              >
+                <span className="flex h-2 w-2 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                </span>
+                <Users className="w-3.5 h-3.5 text-blue-500 dark:text-blue-400" />
+                <span className="font-mono tracking-tight font-bold">{totalActivePlayersCount}</span>
+              </button>
               
               {/* Profile Icon Button */}
               <button
@@ -711,19 +781,41 @@ export default function App() {
                         <span className="text-[9px] font-semibold text-gray-400">Showing last 10</span>
                       </div>
                       <div className="space-y-2">
-                        {history.slice(0, 10).map((h, index) => (
-                          <div 
-                            key={`${h.roundId}-${index}`} 
-                            className="flex justify-between items-center text-xs bg-gray-50 dark:bg-gray-950 p-2.5 rounded-xl border border-gray-100 dark:border-gray-800"
-                          >
-                            <span className="font-black text-gray-400">#{h.roundId}</span>
-                            <div className="flex gap-2 font-mono font-bold">
-                               <span className={h.winner % 2 === 0 ? 'text-red-500' : 'text-blue-500'}>
-                                 Winner: {h.winner} ({h.winner % 2 === 0 ? 'ሞላ' : 'ጎደል'})
-                               </span>
+                        {history.slice(0, 10).map((h, index) => {
+                          const isEven = h.winner % 2 === 0;
+                          const didBet = h.betAmount !== undefined;
+                          const wonBet = didBet && ((isEven && h.betSide === 'even') || (!isEven && h.betSide === 'odd'));
+                          return (
+                            <div 
+                              key={`${h.roundId}-${index}`} 
+                              className="flex justify-between items-center text-xs bg-gray-50 dark:bg-gray-950 p-2.5 rounded-xl border border-gray-100 dark:border-gray-850"
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="font-black text-gray-400">#{h.roundId}</span>
+                                <span className={`inline-flex items-center font-mono font-black px-2 py-0.5 rounded text-[10px] ${
+                                  isEven 
+                                    ? 'bg-red-500/10 text-red-500 border border-red-500/20' 
+                                    : 'bg-blue-500/10 text-blue-500 border border-blue-500/20'
+                                }`}>
+                                  {h.winner} ({isEven ? 'ሞላ' : 'ጎደል'})
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                 {didBet ? (
+                                   <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${
+                                     wonBet 
+                                       ? 'bg-emerald-500/10 text-emerald-500' 
+                                       : 'bg-zinc-500/10 text-zinc-400 dark:text-zinc-500'
+                                   }`}>
+                                     {wonBet ? `+${h.netWin?.toLocaleString()} ETB` : `-${h.betAmount?.toLocaleString()} ETB`}
+                                   </span>
+                                 ) : (
+                                   <span className="text-[9px] text-gray-400 dark:text-zinc-600 uppercase font-bold tracking-wider">No Bet</span>
+                                 )}
+                              </div>
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -793,23 +885,6 @@ export default function App() {
                     >
                       {copiedId ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
                     </button>
-                  </div>
-
-                  {/* Small Profile Stats Row */}
-                  <div className="grid grid-cols-2 gap-2 mt-4 bg-gray-50 dark:bg-gray-950/40 p-3 rounded-xl border border-gray-100 dark:border-gray-800/60 text-center">
-                    <div>
-                      <div className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Matches Spin</div>
-                      <div className="text-sm font-black text-gray-800 dark:text-gray-200">{gameHistory.length}</div>
-                    </div>
-                    <div>
-                      <div className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Accrued Wins</div>
-                      <div className="text-sm font-black text-green-500">
-                        {gameHistory.length > 0 ? 
-                          `${((gameHistory.filter(log => log.change > 0 || log.result?.includes('Win') || log.result?.includes('Won')).length / gameHistory.length) * 100).toFixed(1)}%` 
-                          : '0.0%'
-                        }
-                      </div>
-                    </div>
                   </div>
                 </div>
 
@@ -1057,49 +1132,288 @@ export default function App() {
                       ))}
                     </div>
                   </div>
-                ) : (
-                  <div className="bg-white dark:bg-gray-900 rounded-2xl p-4 border border-gray-200 dark:border-gray-800 transition-colors shadow-xs">
-                    <h3 className="text-xs font-black uppercase text-gray-400 tracking-wider mb-2 flex items-center gap-1.5 flex">
-                      <TrendingUp className="w-4 h-4 mr-1" /> Play History
-                    </h3>
-                    <div className="space-y-3">
-                      {gameHistory.map((log, index) => (
-                        <div key={`${log.id}-${index}`} className="bg-gray-50 dark:bg-gray-950 border border-gray-100 dark:border-gray-800/50 rounded-xl p-3 shadow-xs flex justify-between items-center">
-                          <div className="space-y-1">
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-[10px] font-black uppercase text-blue-500 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-1.5 py-0.5 rounded">
-                                {log.type}
-                              </span>
-                              <span className="text-[10px] text-gray-400 font-mono font-bold">{log.id}</span>
-                            </div>
-                            {log.bet > 0 && (
-                              <div className="text-xs font-bold text-gray-700 dark:text-gray-300">
-                                Bet: {log.bet.toLocaleString()} ETB <span className="text-gray-400 mx-1">•</span> Choice: {log.numbers}
-                              </div>
-                            )}
-                            <div className="text-[10px] text-gray-400">
-                              {log.date}
-                            </div>
-                          </div>
-                          
-                          <div className="text-right flex flex-col items-end">
-                            <div className={`text-xs font-black uppercase tracking-wider mb-0.5 ${
-                              log.result === 'Loss' ? 'text-gray-500' : 'text-green-500 animate-pulse'
-                            }`}>
-                              {log.result}
-                            </div>
-                            <div className={`text-sm font-mono font-black ${
-                              log.change > 0 ? 'text-green-500' : 'text-red-500'
-                            }`}>
-                              {log.change > 0 ? '+' : ''}{log.change.toLocaleString()}
-                            </div>
-                            <div className="text-[9px] font-bold text-gray-400 mt-1 uppercase">{log.status}</div>
-                          </div>
+                ) : (() => {
+                  interface GroupedGameLog {
+                    id: string;
+                    type: string;
+                    date: string;
+                    status: string;
+                    totalChange: number;
+                    bet: number;
+                    choices: string[];
+                    winningNums: string;
+                    outcomes: Array<{
+                      result: string;
+                      change: number;
+                      numbers: string;
+                    }>;
+                  }
+
+                  const getGameBadgeName = (type: string): string => {
+                    const t = type.toLowerCase();
+                    if (t === 'even/odd' || t.includes('even/odd')) return 'ሞላ/ጎደለ';
+                    if (t === 'chance 1-10' || t.includes('1-10')) return 'ፈጣን (1-10)';
+                    if (t === 'chance 1-20' || t.includes('1-20')) return 'ፈጣን (1-20)';
+                    if (t === 'jackpot mini' || (t.includes('jackpot') && t.includes('mini'))) return 'ዕድል (1-50)';
+                    if (t === 'jackpot grand' || (t.includes('jackpot') && t.includes('grand'))) return 'ዕድል (1-100)';
+                    return type;
+                  };
+
+                  const getBadgeStyles = (type: string): string => {
+                    const t = type.toLowerCase();
+                    if (t.includes('even/odd')) {
+                      return 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 dark:text-emerald-400 border-emerald-200/40 dark:border-emerald-900/20';
+                    }
+                    if (t.includes('1-10')) {
+                      return 'bg-indigo-50 dark:bg-indigo-950/30 text-indigo-600 dark:text-indigo-400 border-indigo-200/40 dark:border-indigo-900/20';
+                    }
+                    if (t.includes('1-20')) {
+                      return 'bg-purple-50 dark:bg-purple-950/30 text-purple-600 dark:text-purple-400 border-purple-200/40 dark:border-purple-900/20';
+                    }
+                    if (t.includes('mini')) {
+                      return 'bg-cyan-50 dark:bg-cyan-950/30 text-cyan-600 dark:text-cyan-400 border-cyan-200/40 dark:border-cyan-900/20';
+                    }
+                    if (t.includes('grand')) {
+                      return 'bg-amber-50 dark:bg-amber-950/30 text-amber-600 dark:text-amber-400 border-amber-200/40 dark:border-amber-900/20';
+                    }
+                    return 'bg-gray-50 dark:bg-gray-950/30 text-gray-600 dark:text-gray-400 border-gray-200/40 dark:border-gray-900/20';
+                  };
+
+                  const groups: { [key: string]: GroupedGameLog } = {};
+                  const sortedLogs = [...gameHistory].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+                  sortedLogs.forEach(log => {
+                    const key = `${log.id}_${log.type}`;
+                    if (!groups[key]) {
+                      groups[key] = {
+                        id: log.id,
+                        type: log.type,
+                        date: log.date,
+                        status: log.status || 'Completed',
+                        totalChange: 0,
+                        bet: 0,
+                        choices: [],
+                        winningNums: log.winningNums || '-',
+                        outcomes: []
+                      };
+                    }
+                    
+                    groups[key].totalChange += log.change;
+                    if (log.bet && log.bet > 0) {
+                      groups[key].bet += log.bet;
+                    }
+                    if (log.numbers && log.numbers !== '-') {
+                      const incomingChoices = log.numbers.split(',').map(n => n.trim()).filter(Boolean);
+                      incomingChoices.forEach(choice => {
+                        if (!groups[key].choices.includes(choice)) {
+                          groups[key].choices.push(choice);
+                        }
+                      });
+                    }
+                    if (log.winningNums && log.winningNums !== '-') {
+                      if (groups[key].winningNums === '-') {
+                        groups[key].winningNums = log.winningNums;
+                      } else {
+                        const existing = groups[key].winningNums.split(',').map(n => n.trim()).filter(Boolean);
+                        const incoming = log.winningNums.split(',').map(n => n.trim()).filter(Boolean);
+                        const combined = Array.from(new Set([...existing, ...incoming]));
+                        groups[key].winningNums = combined.join(', ');
+                      }
+                    }
+                    
+                    const exists = groups[key].outcomes.some(o => o.result === log.result && o.change === log.change && o.numbers === log.numbers);
+                    if (!exists) {
+                      groups[key].outcomes.push({
+                        result: log.result,
+                        change: log.change,
+                        numbers: log.numbers
+                      });
+                    }
+                  });
+
+                  const groupedList = Object.values(groups).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+                  const filteredGroups = groupedList.filter(group => {
+                    if (historyFilter === 'all') return true;
+                    const typeLower = group.type.toLowerCase();
+                    if (historyFilter === 'even_odd') {
+                      return typeLower === 'even/odd' || typeLower.includes('even/odd');
+                    }
+                    if (historyFilter === 'wheel_1_10') {
+                      return typeLower === 'chance 1-10' || typeLower.includes('1-10');
+                    }
+                    if (historyFilter === 'wheel_1_20') {
+                      return typeLower === 'chance 1-20' || typeLower.includes('1-20');
+                    }
+                    if (historyFilter === 'jackpot_mini') {
+                      return typeLower === 'jackpot mini' || (typeLower.includes('jackpot') && typeLower.includes('mini'));
+                    }
+                    if (historyFilter === 'jackpot_grand') {
+                      return typeLower === 'jackpot grand' || (typeLower.includes('jackpot') && typeLower.includes('grand'));
+                    }
+                    return true;
+                  });
+
+                  return (
+                    <div className="bg-white dark:bg-gray-900 rounded-2xl p-4 border border-gray-200 dark:border-gray-800 transition-colors shadow-xs">
+                      <div className="flex justify-between items-center mb-4 flex-wrap gap-2 border-b border-gray-100 dark:border-gray-800 pb-3">
+                        <h3 className="text-xs font-black uppercase text-gray-400 tracking-wider flex items-center gap-1.5">
+                          <TrendingUp className="w-4 h-4 mr-1 text-blue-500" /> Play History
+                        </h3>
+                        
+                        <div className="relative">
+                          <select
+                            value={historyFilter}
+                            onChange={(e) => setHistoryFilter(e.target.value)}
+                            className="text-[11px] font-black bg-gray-50 dark:bg-gray-950 text-gray-700 dark:text-gray-300 px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-800 outline-none cursor-pointer focus:ring-1 focus:ring-blue-500 transition-all"
+                          >
+                            <option value="all">ሁሉም ጨዋታዎች (All Games)</option>
+                            <option value="even_odd">🟢 ሞላ/ጎደለ (Even/Odd)</option>
+                            <option value="wheel_1_10">🎡 ፈጣን (1-10)</option>
+                            <option value="wheel_1_20">🎡 ፈጣን (1-20)</option>
+                            <option value="jackpot_mini">🏆 ዕድል (1-50)</option>
+                            <option value="jackpot_grand">🏆 ዕድል (1-100)</option>
+                          </select>
                         </div>
-                      ))}
+                      </div>
+
+                      <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
+                        {filteredGroups.length === 0 ? (
+                           <div className="text-center py-8 text-xs text-gray-400 font-medium">
+                             No play logs found for this filter.
+                           </div>
+                        ) : (
+                          filteredGroups.map((log, index) => {
+                            const isWin = log.outcomes.some(o => o.result.toLowerCase().includes('win'));
+
+                            const gameIcon = () => {
+                              const t = log.type.toLowerCase();
+                              if (t.includes('even/odd')) return <Coins className="w-5 h-5 text-emerald-500" />;
+                              if (t.includes('chance')) return <RefreshCw className="w-5 h-5 text-indigo-500 animate-spin-slow" />;
+                              return <Trophy className="w-5 h-5 text-amber-500" />;
+                            };
+
+                            return (
+                              <div 
+                                key={`${log.id}-${index}`} 
+                                className={`group relative overflow-hidden bg-gray-50/40 dark:bg-zinc-950/20 border border-gray-150/60 dark:border-zinc-800/40 rounded-xl p-3 md:p-4 transition-all hover:border-blue-500/20 hover:shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3 md:gap-4 border-l-[5px] ${
+                                  isWin 
+                                    ? 'border-l-emerald-500 dark:border-l-emerald-500/80' 
+                                    : 'border-l-zinc-300 dark:border-l-zinc-700/80'
+                                }`}
+                              >
+                                {/* Left section: Game badge, round, and time */}
+                                <div className="flex items-center gap-3 shrink-0">
+                                  <div className={`p-2 rounded-lg border shrink-0 shadow-3xs ${
+                                    log.type.toLowerCase().includes('even/odd')
+                                      ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500'
+                                      : log.type.toLowerCase().includes('chance')
+                                      ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-500'
+                                      : 'bg-amber-500/10 border-amber-500/20 text-amber-500'
+                                  }`}>
+                                    {gameIcon()}
+                                  </div>
+                                  <div className="space-y-0.5">
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full border ${getBadgeStyles(log.type)}`}>
+                                        {getGameBadgeName(log.type)}
+                                      </span>
+                                      <span className="text-[9px] text-gray-500 dark:text-zinc-400 font-mono font-black bg-white dark:bg-zinc-900 border border-gray-150 dark:border-zinc-800 px-1.5 py-0.5 rounded shadow-2xs">
+                                        {log.id}
+                                      </span>
+                                    </div>
+                                    <div className="text-[10px] text-gray-400 dark:text-zinc-500 font-bold flex items-center gap-1">
+                                      <Clock className="w-3.5 h-3.5 text-gray-300 dark:text-zinc-600" />
+                                      {log.date}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Responsive Two-Column Grid for Choice & Winning Numbers on Mobile, Side-By-Side Flex on Desktop */}
+                                <div className="grid grid-cols-2 md:flex md:flex-row flex-1 gap-3 md:gap-6 justify-between items-start md:items-center">
+                                  {/* Middle section: Player's Choice */}
+                                  <div className="flex flex-col gap-1 md:border-l md:border-gray-150 md:dark:border-zinc-800/60 md:pl-5">
+                                    <span className="text-[8.5px] font-black tracking-wider text-gray-400 dark:text-zinc-500 uppercase flex items-center gap-1">
+                                      <Dices className="w-3.5 h-3.5 text-blue-500/80" /> የአንተ ምርጫ • YOUR CHOICE
+                                    </span>
+                                    <div className="flex flex-wrap gap-1">
+                                      {log.choices.length > 0 ? (
+                                        log.choices.flatMap(c => c.split(',').map(s => s.trim())).map((choice, cIdx) => {
+                                          const cleanChoice = choice.trim();
+                                          const cleanWinNums = (log.winningNums || '').split(',').map(s => s.trim());
+                                          const isMatch = cleanWinNums.includes(cleanChoice);
+                                          return (
+                                            <span 
+                                              key={cIdx} 
+                                              className={`inline-flex items-center text-[10px] font-mono font-black px-2 py-0.5 rounded-full border transition-all ${
+                                                isMatch 
+                                                  ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30 dark:border-emerald-500/20 shadow-xs animate-pulse' 
+                                                : 'bg-blue-50/70 dark:bg-blue-950/20 text-blue-600 dark:text-blue-400 border-blue-100/30 dark:border-blue-900/10'
+                                              }`}
+                                            >
+                                              {isMatch && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1" />}
+                                              {choice}
+                                            </span>
+                                          );
+                                        })
+                                      ) : (
+                                        <span className="text-xs text-gray-400 dark:text-zinc-500 font-mono">-</span>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* Right section: Winning Numbers */}
+                                  <div className="flex flex-col gap-1 md:items-end md:border-l md:border-gray-150 md:dark:border-zinc-800/60 md:pl-5 md:text-right">
+                                    <span className="text-[8.5px] font-black tracking-wider text-gray-400 dark:text-zinc-500 uppercase flex items-center gap-1 md:justify-end">
+                                      <Trophy className="w-3.5 h-3.5 text-amber-500/80" /> አሸናፊ ቁጥር • WINNING NUMBERS
+                                    </span>
+                                    <div className="flex items-center gap-2 flex-wrap md:justify-end">
+                                      <div className="flex flex-wrap gap-1 md:justify-end">
+                                        {(log.winningNums || '-').split(',').map((wn, wnIdx) => {
+                                          const cleanWn = wn.trim();
+                                          if (!cleanWn) return null;
+                                          const userHadThis = log.choices.flatMap(c => c.split(',').map(s => s.trim())).includes(cleanWn);
+                                          
+                                          // Format with 1st, 2nd, 3rd prefix labels for multiple draws
+                                          const typeLower = log.type.toLowerCase();
+                                          const showLabel = typeLower.includes('chance') || typeLower.includes('jackpot');
+                                          const label = showLabel 
+                                            ? (wnIdx === 0 ? '1st - ' : wnIdx === 1 ? '2nd - ' : wnIdx === 2 ? '3rd - ' : `${wnIdx + 1}th - `)
+                                            : '';
+
+                                          return (
+                                            <span 
+                                              key={wnIdx} 
+                                              className={`inline-flex items-center font-mono font-black text-[10px] px-2 py-0.5 rounded-md border ${
+                                                userHadThis 
+                                                  ? 'bg-emerald-500/10 dark:bg-emerald-950/20 text-emerald-600 dark:text-emerald-400 border-emerald-300 dark:border-emerald-800/40 shadow-xs' 
+                                                  : 'bg-zinc-100 dark:bg-zinc-900/60 text-gray-700 dark:text-zinc-400 border-gray-200/80 dark:border-zinc-800/50'
+                                              }`}
+                                            >
+                                              {label}<span className={userHadThis ? 'text-emerald-500 font-black' : ''}>{cleanWn}</span>
+                                            </span>
+                                          );
+                                        })}
+                                      </div>
+                                      
+                                      <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded border shrink-0 flex items-center gap-1 ${
+                                        isWin 
+                                          ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' 
+                                          : 'bg-zinc-500/10 text-zinc-500 border-zinc-500/20'
+                                      }`}>
+                                        {isWin ? '🏆 WIN' : '❌ MISS'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
               </div>
             </motion.div>
           </>

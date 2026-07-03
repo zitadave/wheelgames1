@@ -21,6 +21,7 @@ export interface RoomState {
   feed: string[];
   capacity: { even: number; odd: number };
   winner?: number; // 1-6
+  onlineCount?: number;
 }
 
 const MAX_CAPACITY = 200;
@@ -34,6 +35,7 @@ class Room {
   private timer: NodeJS.Timeout | null = null;
   private io: Server;
   private roundIdCounter = 1;
+  private dbUsers: any[] = [];
 
   constructor(id: string, io: Server) {
     this.io = io;
@@ -46,8 +48,87 @@ class Room {
       pools: { even: 0, odd: 0 },
       feed: [],
       capacity: { even: 0, odd: 0 },
+      onlineCount: 15,
     };
+    this.initRoundCounterAndStart();
+  }
+
+  private async initRoundCounterAndStart() {
+    try {
+      if (supabase) {
+        const { data, error } = await supabase
+          .from("rounds")
+          .select("round_number")
+          .eq("room_id", this.state.id)
+          .order("round_number", { ascending: false })
+          .limit(1);
+          
+        if (!error && data && data.length > 0) {
+          this.roundIdCounter = data[0].round_number;
+          console.log(`Persistent Round ID Counter initialized to ${this.roundIdCounter} from database for room ${this.state.id}`);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch latest round_number from Supabase:", err);
+    }
     this.startLoop();
+  }
+
+  private async fetchDatabaseUsers() {
+    try {
+      if (supabase) {
+        const { data, error } = await supabase
+          .from("users")
+          .select("id, username, photo_url, first_name, last_name")
+          .order("created_at", { ascending: false })
+          .limit(60);
+        if (!error && data) {
+          this.dbUsers = data;
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch users from database:", err);
+    }
+  }
+
+  public updateOnlineCount() {
+    const clientsInRoom = this.io.sockets.adapter.rooms.get(this.state.id)?.size || 0;
+    const dbUsersCount = this.dbUsers.length;
+    const baseCount = Math.max(12, dbUsersCount);
+    const variance = (this.state.roundId % 5) - 2; // slight shift
+    this.state.onlineCount = baseCount + clientsInRoom + variance;
+  }
+
+  private simulateDbUserBet() {
+    if (this.dbUsers.length === 0) return;
+    const randomUser = this.dbUsers[Math.floor(Math.random() * this.dbUsers.length)];
+    if (!randomUser) return;
+
+    // Do not override a player if they already put a bet
+    if (this.state.players[randomUser.id]) return;
+
+    const side: Side = Math.random() > 0.5 ? "even" : "odd";
+    const amounts = [100, 500, 1000, 2000, 5000, 10000];
+    const amount = amounts[Math.floor(Math.random() * amounts.length)];
+
+    let username = randomUser.username || `${randomUser.first_name || "User"}_${randomUser.id.slice(0, 4)}`;
+    if (!username.startsWith("@")) {
+      username = `@${username}`;
+    }
+
+    this.state.players[randomUser.id] = {
+      userId: randomUser.id,
+      username,
+      amount,
+      side,
+      partial: true
+    };
+    this.state.capacity[side] += 1;
+    this.state.pools[side] += amount;
+
+    const sideName = side === "even" ? "ሞላ (Even)" : "ጎደል (Odd)";
+    this.state.feed.unshift(`${username} placed ${amount.toLocaleString()} on ${sideName}!`);
+    if (this.state.feed.length > 10) this.state.feed.pop();
   }
 
   private startLoop() {
@@ -60,7 +141,12 @@ class Room {
     this.state.feed = [];
     this.state.capacity = { even: 0, odd: 0 };
     this.state.winner = undefined;
-    this.broadcastState();
+
+    // Load actual DB users to feed simulation & dynamic online counters
+    this.fetchDatabaseUsers().then(() => {
+      this.updateOnlineCount();
+      this.broadcastState();
+    });
 
     this.timer = setInterval(() => {
       this.tick();
@@ -69,6 +155,14 @@ class Room {
 
   private tick() {
     this.state.timeLeft -= 1;
+
+    // Simulate database users putting bets during the betting phase
+    if (this.state.status === "betting" && this.state.timeLeft > 8) {
+      if (Math.random() < 0.35) {
+        this.simulateDbUserBet();
+      }
+    }
+
     this.broadcastState();
 
     if (this.state.timeLeft <= 0) {
@@ -225,7 +319,7 @@ class Room {
     }
   }
 
-  private broadcastState() {
+  public broadcastState() {
     this.io.to(this.state.id).emit("roomState", this.state);
   }
 
@@ -344,6 +438,17 @@ export function initGameEngine(io: Server) {
            type: data.type,
            description: data.description
         });
+
+        // Auto-sync client with the latest 50 transactions from DB
+        const { data: txData, error: txError } = await supabase
+          .from("transactions")
+          .select("*")
+          .eq("user_id", data.userId)
+          .order("created_at", { ascending: false })
+          .limit(50);
+        if (!txError && txData) {
+          socket.emit("userTransactions", txData);
+        }
       } catch (e) {
          console.error("Log tx error:", e);
       }
@@ -361,6 +466,17 @@ export function initGameEngine(io: Server) {
            result: data.result,
            win_amount: data.winAmount
         });
+
+        // Auto-sync client with the latest 50 game logs from DB
+        const { data: logsData, error: logsError } = await supabase
+          .from("game_logs")
+          .select("*")
+          .eq("user_id", data.userId)
+          .order("created_at", { ascending: false })
+          .limit(50);
+        if (!logsError && logsData) {
+          socket.emit("userGameLogs", logsData);
+        }
       } catch (e) {
          console.error("Log game error:", e);
       }
@@ -409,7 +525,18 @@ export function initGameEngine(io: Server) {
       socket.join(roomId);
       currentRoomId = roomId;
       if (rooms[roomId as keyof typeof rooms]) {
-        socket.emit("roomState", rooms[roomId as keyof typeof rooms].state);
+        const r = rooms[roomId as keyof typeof rooms];
+        r.updateOnlineCount();
+        socket.emit("roomState", r.state);
+        r.broadcastState();
+      }
+    });
+
+    socket.on("disconnect", () => {
+      if (currentRoomId && rooms[currentRoomId as keyof typeof rooms]) {
+        const r = rooms[currentRoomId as keyof typeof rooms];
+        r.updateOnlineCount();
+        r.broadcastState();
       }
     });
 

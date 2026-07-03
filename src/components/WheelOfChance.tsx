@@ -390,10 +390,17 @@ export function WheelOfChance({
         const claim = claimedSlots[winningSectorVal];
         const isSelfWinner = claim?.isSelf;
 
+        const choiceStr = Object.entries(claimedSlots)
+          .filter(([_, value]: [any, any]) => value.isSelf)
+          .map(([key, _]) => `#${key}`)
+          .join(', ');
+        const winNumStr = `#${winningSectorVal}`;
+        const gameTypeWithDetails = `Chance ${activeRoom} | R#${currentRoundId} | Choice:${choiceStr || '-'} | WinNum:${winNumStr}`;
+
         if (isSelfWinner) {
           setBalance(b => {
             const newBalance = b + payoutAmount;
-            socket?.emit('logGamePlay', { userId, gameType: 'Chance ' + activeRoom, result: `${tierName} Win`, winAmount: payoutAmount, newBalance });
+            socket?.emit('logGamePlay', { userId, gameType: gameTypeWithDetails, result: `${tierName} Win`, winAmount: payoutAmount, newBalance });
             socket?.emit('logTransaction', { userId, amount: payoutAmount, type: 'win', description: `🏆 P2P ${tierName} Grand Victory (#${winningSectorVal})`, newBalance });
             return newBalance;
           });
@@ -406,7 +413,8 @@ export function WheelOfChance({
               id: `R#${currentRoundId}`,
               type: `Chance ${activeRoom}`,
               bet: entryFee,
-              numbers: winningSectorVal.toString(),
+              numbers: choiceStr || '-',
+              winningNums: winNumStr,
               date: new Date().toLocaleString(),
               result: `${tierName} Win`,
               change: payoutAmount,
@@ -424,6 +432,7 @@ export function WheelOfChance({
           // Alternatively, we can log the loss for the entire round later. Let's just log a loss right now if they didn't win.
           const selfClaimed = Object.values(claimedSlots).some((c: any) => c.isSelf);
           if (selfClaimed) {
+             socket?.emit('logGamePlay', { userId, gameType: gameTypeWithDetails, result: 'Miss', winAmount: 0, newBalance: balance });
              setGameHistory(prev => {
                 // To avoid duplicate loss logs per round, only log if not already there, but since each draw is a different event, it's fine.
                 // Wait, it's better to log the outcome.
@@ -432,7 +441,8 @@ export function WheelOfChance({
                     id: `R#${currentRoundId}`,
                     type: `Chance ${activeRoom}`,
                     bet: entryFee,
-                    numbers: '-',
+                    numbers: choiceStr || '-',
+                    winningNums: winNumStr,
                     date: new Date().toLocaleString(),
                     result: 'Miss',
                     change: 0, // They lost the bet earlier

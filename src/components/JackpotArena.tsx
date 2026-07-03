@@ -436,6 +436,13 @@ export function JackpotArena({
 
     // Handle user payouts
     const isSelfWin = activeGrid[winnerNum]?.isSelf;
+    const choiceStr = Object.entries(activeGrid)
+      .filter(([_, value]: [any, any]) => value.isSelf)
+      .map(([key, _]) => `#${key}`)
+      .join(', ');
+    const winNumStr = `#${winnerNum}`;
+    const gameTypeWithDetails = `Jackpot ${tier} | R#${currentRoundId} | Choice:${choiceStr || '-'} | WinNum:${winNumStr}`;
+
     if (isSelfWin) {
       let prize = 0;
       if (drawIndex === 1) prize = currentConfig.p1;
@@ -444,7 +451,7 @@ export function JackpotArena({
 
       setBalance(prev => {
         const newBalance = prev + prize;
-        socket?.emit('logGamePlay', { userId, gameType: 'Jackpot', result: `Won ${drawIndex}st Place`, winAmount: prize, newBalance });
+        socket?.emit('logGamePlay', { userId, gameType: gameTypeWithDetails, result: `${drawIndex === 1 ? '1st' : drawIndex === 2 ? '2nd' : '3rd'} Place Win`, winAmount: prize, newBalance });
         socket?.emit('logTransaction', { userId, amount: prize, type: 'win', description: `🏆 Jackpot ${drawIndex}st Place Win!`, newBalance });
         return newBalance;
       });
@@ -457,7 +464,8 @@ export function JackpotArena({
           id: `R#${currentRoundId}`,
           type: `Jackpot ${tier}`,
           bet: currentConfig.entry,
-          numbers: winnerNum.toString(),
+          numbers: choiceStr || '-',
+          winningNums: winNumStr,
           date: new Date().toLocaleString(),
           result: `${drawIndex === 1 ? '1st' : drawIndex === 2 ? '2nd' : '3rd'} Place Win`,
           change: prize,
@@ -469,12 +477,14 @@ export function JackpotArena({
     } else {
       const selfClaimed = Object.values(activeGrid).some((c: any) => c.isSelf);
       if (selfClaimed && drawIndex === 3) { // Only log miss on the 3rd draw for jackpot
+           socket?.emit('logGamePlay', { userId, gameType: gameTypeWithDetails, result: 'Miss', winAmount: 0, newBalance: balance });
            setGameHistory(prev => [
              {
                id: `R#${currentRoundId}`,
                type: `Jackpot ${tier}`,
                bet: currentConfig.entry,
-               numbers: '-',
+               numbers: choiceStr || '-',
+               winningNums: winNumStr,
                date: new Date().toLocaleString(),
                result: 'Miss',
                change: 0,

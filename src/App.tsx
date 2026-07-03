@@ -143,23 +143,33 @@ export default function App() {
   const [copiedId, setCopiedId] = useState<boolean>(false);
 
   useEffect(() => {
-    fetch(`${BACKEND_URL}/api/bot-info`)
+    if (!BACKEND_URL) return;
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    fetch(`${BACKEND_URL}/api/bot-info`, { signal: controller.signal })
       .then(res => {
+        clearTimeout(timeoutId);
         const contentType = res.headers.get("content-type");
         if (res.ok && contentType && contentType.includes("application/json")) {
           return res.json();
         }
-        throw new Error(`Invalid response or non-JSON content-type: ${contentType}`);
+        return null;
       })
       .then(data => {
         if (data && data.username) setBotUsername(data.username);
       })
       .catch(err => {
-        console.warn("Failed to fetch bot-info gracefully:", err);
+        if (err.name !== 'AbortError') {
+          console.warn("Failed to fetch bot-info gracefully:", err.message);
+        }
       });
+      
+    return () => clearTimeout(timeoutId);
   }, []);
 
-  const totalActivePlayersCount = roomState?.onlineCount || (roomState ? Object.keys(roomState.players).length + 12 : 12);
+  const totalActivePlayersCount = roomState?.onlineCount || 0;
 
   const vipPlayersList = React.useMemo(() => {
     const realPlayers = roomState?.players || {};
@@ -192,8 +202,16 @@ export default function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
-    const newSocket = io(SOCKET_URL);
+    const newSocket = io(SOCKET_URL, {
+      transports: ['websocket', 'polling'],
+      reconnectionAttempts: 5,
+      timeout: 10000
+    });
     setSocket(newSocket);
+
+    newSocket.on('connect_error', (err) => {
+      console.warn("Socket connection error, falling back to polling if available:", err.message);
+    });
 
     newSocket.on('roomsStatus', (status) => setRoomsStatus(status));
     
@@ -648,7 +666,7 @@ export default function App() {
                 <div className="absolute -top-4 -right-4 z-20 text-[10px] font-black uppercase text-blue-500 bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 rounded-full tracking-widest">
                   Round #{roomState?.roundId || '...'}
                 </div>
-                <Wheel status={roomState?.status || 'betting'} winner={roomState?.winner} soundTicks={soundTicks} timeLeft={roomState?.timeLeft} />
+                <Wheel status={roomState?.status || 'betting'} winner={roomState?.winner} soundTicks={soundTicks && activeTab === 'even_odd'} timeLeft={roomState?.timeLeft} />
               </div>
 
                 {/* Result Announcement Overlay */}
@@ -832,8 +850,8 @@ export default function App() {
                   setGameHistory={setGameHistory}
                   isDarkMode={isDarkMode}
                   soundTicks={soundTicks}
+                  isActive={activeTab === 'jackpot'}
                   onTheaterModeChange={setIsJackpotTheaterMode}
-                  onBack={() => setActiveTab('even_odd')}
                   socket={socket}
                   userId={userId}
                 />
@@ -848,7 +866,7 @@ export default function App() {
                   setGameHistory={setGameHistory}
                   isDarkMode={isDarkMode}
                   soundTicks={soundTicks}
-                  onBack={() => setActiveTab('even_odd')}
+                  isActive={activeTab === 'chance'}
                   socket={socket}
                   userId={userId}
                 />

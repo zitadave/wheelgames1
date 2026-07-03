@@ -11,8 +11,8 @@ interface JackpotArenaProps {
   setGameHistory: React.Dispatch<React.SetStateAction<any[]>>;
   isDarkMode: boolean;
   soundTicks: boolean;
+  isActive?: boolean;
   onTheaterModeChange?: (active: boolean) => void;
-  onBack?: () => void;
   socket?: any;
   userId?: string;
 }
@@ -37,8 +37,8 @@ export function JackpotArena({
   setGameHistory,
   isDarkMode,
   soundTicks,
+  isActive = true,
   onTheaterModeChange,
-  onBack,
   socket,
   userId
 }: JackpotArenaProps) {
@@ -162,7 +162,7 @@ export function JackpotArena({
 
   // Sound generator
   const playHapticAudio = (freq = 600) => {
-    if (!soundTicks || !isMounted.current) return;
+    if (!soundTicks || !isMounted.current || !isActive) return;
     try {
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
       const osc = audioCtx.createOscillator();
@@ -179,6 +179,7 @@ export function JackpotArena({
   };
 
   const playWinnerAudio = () => {
+    if (!soundTicks || !isActive) return;
     try {
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
       const osc = audioCtx.createOscillator();
@@ -284,14 +285,16 @@ export function JackpotArena({
   }, [gamePhase, freezeCountdown]);
 
   // General Drawing Controller
-  const executeSequentialDraw = (drawIndex: 1 | 2 | 3) => {
+  const executeSequentialDraw = (drawIndex: 1 | 2 | 3, excludedOverride?: number[]) => {
     setDrawNumber(drawIndex);
     setGamePhase('drawing');
 
     // Filter valid remaining slots
     const availableSpots: number[] = [];
+    const currentExcluded = excludedOverride || [...vaporizedSlots, ...Object.values(winners)];
+    
     for (let i = 1; i <= currentConfig.slots; i++) {
-      if (activeGrid[i] && !vaporizedSlots.includes(i) && !Object.values(winners).includes(i)) {
+      if (activeGrid[i] && !currentExcluded.includes(i)) {
         availableSpots.push(i);
       }
     }
@@ -502,11 +505,12 @@ export function JackpotArena({
       
       if (drawIndex < 3) {
         setGamePhase('vaporizing');
+        const nextExcluded = [...vaporizedSlots, ...Object.values(winners), winnerNum];
         setVaporizedSlots(prev => [...prev, winnerNum]);
         
         // Wait 2.5 seconds in vaporization phase, then proceed
         trackTimeout(() => {
-          executeSequentialDraw((drawIndex + 1) as 2 | 3);
+          executeSequentialDraw((drawIndex + 1) as 2 | 3, nextExcluded);
         }, 2200);
       } else {
         // Fully complete
@@ -572,25 +576,42 @@ export function JackpotArena({
     showNotification(`Secured Grid Position #${num}! Good Luck!`, 'success');
   };
 
+  const [userHiddenTheater, setUserHiddenTheater] = useState(false);
+
+  useEffect(() => {
+    if (gamePhase === 'lobby') {
+      setUserHiddenTheater(false);
+    }
+  }, [gamePhase]);
+
   const isTheaterActive = gamePhase === 'drawing' || gamePhase === 'winner' || gamePhase === 'vaporizing' || gamePhase === 'complete';
+  const showTheater = isTheaterActive && !userHiddenTheater;
 
   return (
     <div className="flex-1 flex flex-col justify-start">
-      {onBack && (
+      {showTheater && (
         <button
-          onClick={onBack}
-          className="absolute top-4 left-4 z-50 p-2 bg-zinc-800 rounded-full text-white"
+          onClick={() => setUserHiddenTheater(true)}
+          className="absolute top-4 left-4 z-50 p-2 bg-zinc-800/80 backdrop-blur-sm rounded-full text-white transition-all hover:bg-zinc-700 shadow-lg"
         >
           <ArrowLeft className="w-5 h-5" />
         </button>
       )}
       
-
-      
-
+      {/* Watch Live Button when drawing is hidden */}
+      {isTheaterActive && userHiddenTheater && (
+        <div className="mx-4 mt-2 mb-4">
+          <button
+            onClick={() => setUserHiddenTheater(false)}
+            className="w-full py-3 bg-amber-500 hover:bg-amber-600 text-zinc-950 font-black rounded-xl text-xs uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg animate-pulse"
+          >
+            <Zap className="w-4 h-4 fill-zinc-950" /> Watch Live Draw
+          </button>
+        </div>
+      )}
 
       {/* Room Category Tabs */}
-      {!isTheaterActive && (
+      {!showTheater && (
         <>
           <div className="grid grid-cols-2 gap-2 bg-gray-200/60 dark:bg-gray-900/60 p-1 rounded-xl mb-4 shrink-0 border border-gray-300/40 dark:border-gray-800/40">
           <button
@@ -621,7 +642,7 @@ export function JackpotArena({
 
       {/* 2-Digit Mechanical Odometer Reels (High-fidelity physical canvas reels) */}
       <AnimatePresence>
-        {gamePhase === 'drawing' && currentWinner !== null && (
+        {showTheater && currentWinner !== null && (
           tier === 'grand' ? (
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
@@ -633,7 +654,7 @@ export function JackpotArena({
                 winner={currentWinner}
                 onComplete={() => finalizeDrawWinner(currentWinner, drawNumber)}
                 isDarkMode={isDarkMode}
-                soundTicks={soundTicks}
+                soundTicks={soundTicks && isActive}
                 digits={tier === 'grand' ? 3 : 2}
                 duration={tier === 'grand' ? 60.0 : 7.0}
               />
@@ -642,7 +663,7 @@ export function JackpotArena({
                 <span>ROLLING FOR {drawNumber === 1 ? '1ST' : drawNumber === 2 ? '2ND' : '3RD'} PLACE SELECTION</span>
               </div>
               
-              {tier === 'grand' && gamePhase === 'drawing' && (
+              {tier === 'grand' && showTheater && (
                 <div className="flex flex-col items-center justify-center gap-2 bg-zinc-950/90 p-4 rounded-2xl border border-zinc-800 w-full mt-0">
                   <h2 className="text-sm font-black text-amber-500 uppercase tracking-widest">Winners List</h2>
                   <div className="flex flex-col gap-1">
@@ -675,7 +696,7 @@ export function JackpotArena({
       </AnimatePresence>
 
       {/* Manual Start Button for lobby without mock peers */}
-      {!isTheaterActive && gamePhase === 'lobby' && Object.keys(activeGrid).length > 0 && (
+      {!showTheater && gamePhase === 'lobby' && Object.keys(activeGrid).length > 0 && (
         <div className="mb-4">
           <button 
             onClick={triggerGlobalFreeze}
@@ -687,7 +708,7 @@ export function JackpotArena({
       )}
 
       {/* 3D Trophy Podium Section (No label, placed under the selectors) */}
-      {!isTheaterActive && (
+      {!showTheater && (
         <>
         <div className="bg-slate-950/50 p-2.5 rounded-2xl border border-zinc-800/60 mb-3 shadow-inner">
           <div className="flex items-end justify-center gap-2 pt-2 pb-1">
@@ -767,7 +788,7 @@ export function JackpotArena({
       <div className={`flex-1 overflow-y-auto px-1 pr-2 pb-6 max-h-[420px] ${tier === 'grand' && gamePhase === 'drawing' ? 'opacity-0' : 'opacity-100'}`}>
         
         {/* Progress indicator bar (hidden during active drawing) */}
-        {!isTheaterActive && (
+        {!showTheater && (
           <div className="flex justify-between items-center mb-2 px-1">
             <span className="text-sm font-black uppercase text-blue-600 dark:text-blue-400 tracking-wider">
               {Object.keys(activeGrid).length}/{currentConfig.slots} Claimed
@@ -780,7 +801,7 @@ export function JackpotArena({
 
         {/* Dynamic coordinate tiles (Compact 8x13 and 7x8 structures) */}
         <div 
-          className="grid gap-1"
+          className={`grid gap-1 ${showTheater ? 'opacity-20 pointer-events-none' : 'opacity-100'}`}
           style={{
             gridTemplateColumns: 'repeat(8, minmax(0, 1fr))'
           }}
@@ -852,15 +873,15 @@ export function JackpotArena({
         </div>
 
         {/* Jackpot Recent History at the bottom of the scroll view */}
-        {currentHistory.length > 0 && (
-          <div className="bg-zinc-950/60 border border-zinc-800/80 rounded-2xl p-4 shadow-xl mt-4">
-            <h3 className="text-[10px] font-black uppercase text-zinc-500 tracking-wider flex items-center gap-1.5 mb-3">
+        {currentHistory.length > 0 && gamePhase === 'lobby' && (
+          <div className="bg-gray-100 dark:bg-zinc-950/60 border border-gray-200 dark:border-zinc-800/80 rounded-2xl p-4 shadow-xl mt-4">
+            <h3 className="text-[10px] font-black uppercase text-gray-500 dark:text-zinc-500 tracking-wider flex items-center gap-1.5 mb-3">
               <RefreshCw className="w-3 h-3" /> Recent Winners
             </h3>
             <div className="space-y-2">
               {currentHistory.map((h, index) => (
-                <div key={`${h.roundId}-${index}`} className="flex justify-between items-center text-xs bg-zinc-950/50 p-2.5 rounded-xl border border-zinc-800/40">
-                  <span className="font-black text-zinc-400">#{h.roundId}</span>
+                <div key={`${h.roundId}-${index}`} className="flex justify-between items-center text-xs bg-gray-50 dark:bg-zinc-950/50 p-2.5 rounded-xl border border-gray-100 dark:border-zinc-800/40">
+                  <span className="font-black text-gray-400 dark:text-zinc-400">#{h.roundId}</span>
                   <div className="flex gap-2 font-mono font-bold">
                     {h.winners[1] && <span className="text-yellow-400">1st-{h.winners[1]}</span>}
                     {h.winners[2] && <span className="text-zinc-300">2nd-{h.winners[2]}</span>}

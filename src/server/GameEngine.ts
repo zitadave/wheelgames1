@@ -35,7 +35,6 @@ class Room {
   private timer: NodeJS.Timeout | null = null;
   private io: Server;
   private roundIdCounter = 1;
-  private dbUsers: any[] = [];
 
   constructor(id: string, io: Server) {
     this.io = io;
@@ -74,61 +73,9 @@ class Room {
     this.startLoop();
   }
 
-  private async fetchDatabaseUsers() {
-    try {
-      if (supabase) {
-        const { data, error } = await supabase
-          .from("users")
-          .select("id, username, photo_url, first_name, last_name")
-          .order("created_at", { ascending: false })
-          .limit(60);
-        if (!error && data) {
-          this.dbUsers = data;
-        }
-      }
-    } catch (err) {
-      console.error("Failed to fetch users from database:", err);
-    }
-  }
-
   public updateOnlineCount() {
     const clientsInRoom = this.io.sockets.adapter.rooms.get(this.state.id)?.size || 0;
-    const dbUsersCount = this.dbUsers.length;
-    const baseCount = Math.max(12, dbUsersCount);
-    const variance = (this.state.roundId % 5) - 2; // slight shift
-    this.state.onlineCount = baseCount + clientsInRoom + variance;
-  }
-
-  private simulateDbUserBet() {
-    if (this.dbUsers.length === 0) return;
-    const randomUser = this.dbUsers[Math.floor(Math.random() * this.dbUsers.length)];
-    if (!randomUser) return;
-
-    // Do not override a player if they already put a bet
-    if (this.state.players[randomUser.id]) return;
-
-    const side: Side = Math.random() > 0.5 ? "even" : "odd";
-    const amounts = [100, 500, 1000, 2000, 5000, 10000];
-    const amount = amounts[Math.floor(Math.random() * amounts.length)];
-
-    let username = randomUser.username || `${randomUser.first_name || "User"}_${randomUser.id.slice(0, 4)}`;
-    if (!username.startsWith("@")) {
-      username = `@${username}`;
-    }
-
-    this.state.players[randomUser.id] = {
-      userId: randomUser.id,
-      username,
-      amount,
-      side,
-      partial: true
-    };
-    this.state.capacity[side] += 1;
-    this.state.pools[side] += amount;
-
-    const sideName = side === "even" ? "ሞላ (Even)" : "ጎደል (Odd)";
-    this.state.feed.unshift(`${username} placed ${amount.toLocaleString()} on ${sideName}!`);
-    if (this.state.feed.length > 10) this.state.feed.pop();
+    this.state.onlineCount = clientsInRoom;
   }
 
   private startLoop() {
@@ -142,11 +89,8 @@ class Room {
     this.state.capacity = { even: 0, odd: 0 };
     this.state.winner = undefined;
 
-    // Load actual DB users to feed simulation & dynamic online counters
-    this.fetchDatabaseUsers().then(() => {
-      this.updateOnlineCount();
-      this.broadcastState();
-    });
+    this.updateOnlineCount();
+    this.broadcastState();
 
     this.timer = setInterval(() => {
       this.tick();
@@ -155,14 +99,6 @@ class Room {
 
   private tick() {
     this.state.timeLeft -= 1;
-
-    // Simulate database users putting bets during the betting phase
-    if (this.state.status === "betting" && this.state.timeLeft > 8) {
-      if (Math.random() < 0.35) {
-        this.simulateDbUserBet();
-      }
-    }
-
     this.broadcastState();
 
     if (this.state.timeLeft <= 0) {

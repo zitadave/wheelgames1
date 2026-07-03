@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ArrowLeft, Coins, Lock, Check, Trophy, Sparkles, Zap, RefreshCw, Volume2, VolumeX, Medal } from 'lucide-react';
+import { Coins, Lock, Check, Trophy, Sparkles, Zap, RefreshCw, Volume2, VolumeX, Medal } from 'lucide-react';
 
 interface WheelOfChanceProps {
   balance: number;
@@ -9,7 +9,7 @@ interface WheelOfChanceProps {
   setGameHistory: React.Dispatch<React.SetStateAction<any[]>>;
   isDarkMode: boolean;
   soundTicks: boolean;
-  onBack?: () => void;
+  isActive?: boolean;
   socket?: any;
   userId?: string;
 }
@@ -28,7 +28,7 @@ export function WheelOfChance({
   setGameHistory,
   isDarkMode,
   soundTicks: parentSoundTicks,
-  onBack,
+  isActive = true,
   socket,
   userId
 }: WheelOfChanceProps) {
@@ -120,7 +120,7 @@ export function WheelOfChance({
   // Sound generator
   const audioCtxRef = useRef<AudioContext | null>(null);
   const playBeep = (freq = 440, duration = 0.05, type: 'sine' | 'triangle' | 'sawtooth' | 'square' = 'sine') => {
-    if (!soundEnabled || !isMounted.current) return;
+    if (!soundEnabled || !isMounted.current || !isActive) return;
     try {
       if (!audioCtxRef.current) {
         audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -632,14 +632,11 @@ export function WheelOfChance({
   };
 
   return (
-    <div className="flex-1 flex flex-col justify-start text-white select-none relative pb-6">
+    <div className="flex-1 flex flex-col justify-start text-gray-900 dark:text-white select-none relative pb-6">
       
       {/* 1. Room Switcher Tabs - Rendered at the absolute top */}
       <div className="flex flex-col items-center mt-1 mb-3 shrink-0 gap-2">
-        <div className="text-[10px] font-black uppercase text-blue-400 bg-blue-500/10 border border-blue-500/20 px-2.5 py-0.5 rounded-full tracking-widest">
-          Round #{currentRoundId}
-        </div>
-        <div className="inline-flex bg-zinc-900/80 p-1 rounded-full border border-zinc-800">
+        <div className="inline-flex bg-gray-100 dark:bg-zinc-900/80 p-1 rounded-full border border-gray-200 dark:border-zinc-800">
           <button
             onClick={() => {
               if (phase === 'lobby') setActiveRoom('1-10');
@@ -700,11 +697,8 @@ export function WheelOfChance({
         />
       </div>
 
-      {/* 3. Status Filament Info Line */}
-      <div className="text-center py-1.5 shrink-0 h-7 flex items-center justify-center">
-        <span className="text-[11px] font-bold text-blue-400 dark:text-blue-300 tracking-wide animate-pulse">
-          {statusFilament}
-        </span>
+      {/* 3. Status Filament Info Line - Removed as requested */}
+      <div className="text-center py-1 shrink-0 h-4 flex items-center justify-center">
       </div>
 
       {/* Manual Start Button */}
@@ -804,9 +798,9 @@ export function WheelOfChance({
           <div className="space-y-4 mb-4">
             <div>
               <div className="flex justify-between items-center mb-2 px-1">
-                <span className="text-[10px] font-black uppercase text-zinc-400 tracking-wider">CHOOSE SPOT (Entry: {entryFee} ETB)</span>
-                <span className="text-[10px] font-black text-yellow-500 tracking-widest bg-yellow-500/10 border border-yellow-500/20 px-2 rounded-full uppercase">
-                  Pool: {Math.round(maxSlots * entryFee * 0.9).toLocaleString()} ETB
+                <span className="text-[10px] font-black uppercase text-gray-500 dark:text-zinc-400 tracking-wider">CHOOSE SPOT (Entry: {entryFee} ETB)</span>
+                <span className="text-[10px] font-black text-blue-500 tracking-widest bg-blue-500/10 border border-blue-500/20 px-2.5 py-0.5 rounded-full uppercase">
+                  Round #{currentRoundId}
                 </span>
               </div>
 
@@ -817,15 +811,18 @@ export function WheelOfChance({
                   if (claim) {
                     if (claim.isSelf) {
                       return (
-                        <motion.div
+                        <motion.button
                           key={num}
+                          onClick={() => handleClaimSlot(num)}
                           initial={{ scale: 0.95, opacity: 0 }}
                           animate={{ scale: 1, opacity: 1 }}
-                          className="aspect-square rounded-xl bg-blue-600 border border-blue-400 flex flex-col items-center justify-center text-white relative shadow-md"
+                          whileHover={{ scale: 1.03 }}
+                          whileTap={{ scale: 0.95 }}
+                          className="aspect-square rounded-xl bg-blue-600 border border-blue-400 flex flex-col items-center justify-center text-white relative shadow-md cursor-pointer"
                         >
                           <Check className="w-3.5 h-3.5 text-white font-black" />
                           <span className="text-xs font-mono font-black mt-0.5">#{num}</span>
-                        </motion.div>
+                        </motion.button>
                       );
                     } else {
                       return (
@@ -833,9 +830,9 @@ export function WheelOfChance({
                           key={num}
                           initial={{ scale: 0.95, opacity: 0 }}
                           animate={{ scale: 1, opacity: 0.5 }}
-                          className="aspect-square rounded-xl bg-zinc-900 border border-zinc-800/60 flex flex-col items-center justify-center text-zinc-500 pointer-events-none relative"
+                          className="aspect-square rounded-xl bg-gray-200 dark:bg-zinc-900 border border-gray-300 dark:border-zinc-800/60 flex flex-col items-center justify-center text-gray-600 dark:text-zinc-500 pointer-events-none relative"
                         >
-                          <Lock className="w-3 h-3 text-zinc-600" />
+                          <Lock className="w-3 h-3 text-gray-500 dark:text-zinc-600" />
                           <span className="text-[8px] font-semibold mt-0.5 truncate max-w-[38px] leading-none">{claim.username}</span>
                         </motion.div>
                       );
@@ -849,7 +846,7 @@ export function WheelOfChance({
                       onClick={() => handleClaimSlot(num)}
                       whileHover={{ scale: 1.03 }}
                       whileTap={{ scale: 0.95 }}
-                      className="aspect-square rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 hover:border-blue-500 flex flex-col items-center justify-center text-white transition-all cursor-pointer"
+                      className="aspect-square rounded-xl bg-gray-100 dark:bg-white/5 hover:bg-gray-200 dark:hover:bg-white/10 border border-gray-200 dark:border-white/5 hover:border-blue-500 flex flex-col items-center justify-center text-gray-900 dark:text-white transition-all cursor-pointer"
                     >
                       <span className="text-sm font-mono font-black">{num}</span>
                       <span className="text-[8px] font-black text-blue-400 mt-0.5 uppercase tracking-tighter">CLAIM</span>
@@ -862,9 +859,9 @@ export function WheelOfChance({
         )}
 
         {/* Premium Payout Trophy Matrix Card - Always Visible */}
-        <div className="bg-zinc-900/80 border border-zinc-800/80 rounded-2xl p-3.5 max-w-xs mx-auto text-left mb-4">
-          <div className="flex justify-between items-center border-b border-zinc-800/50 pb-2 mb-2">
-            <span className="text-[10px] font-black uppercase text-zinc-400 tracking-wider">Ticket Bet Amount:</span>
+        <div className="bg-gray-100 dark:bg-zinc-900/80 border border-gray-200 dark:border-zinc-800/80 rounded-2xl p-3.5 max-w-xs mx-auto text-left mb-4">
+          <div className="flex justify-between items-center border-b border-gray-200 dark:border-zinc-800/50 pb-2 mb-2">
+            <span className="text-[10px] font-black uppercase text-gray-500 dark:text-zinc-400 tracking-wider">Ticket Bet Amount:</span>
             <span className="text-xs font-black font-mono text-blue-400 bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 rounded-md">
               {entryFee.toLocaleString()} ETB
             </span>
@@ -874,7 +871,7 @@ export function WheelOfChance({
             <div className="flex items-center justify-between text-xs">
               <div className="flex items-center gap-1.5">
                 <span className="text-base">🏆</span>
-                <span className="font-bold text-zinc-300 font-sans">1st Place (Gold):</span>
+                <span className="font-bold text-gray-700 dark:text-zinc-300 font-sans">1st Place (Gold):</span>
               </div>
               <span className="font-mono font-black text-yellow-400">
                 {Math.floor(maxSlots * entryFee * (activeRoom === '1-10' ? 0.8 : 0.7)).toLocaleString()} ETB
@@ -884,7 +881,7 @@ export function WheelOfChance({
             <div className="flex items-center justify-between text-xs">
               <div className="flex items-center gap-1.5">
                 <span className="text-base">🥈</span>
-                <span className="font-bold text-zinc-300 font-sans">2nd Place (Silver):</span>
+                <span className="font-bold text-gray-700 dark:text-zinc-300 font-sans">2nd Place (Silver):</span>
               </div>
               <span className="font-mono font-black text-zinc-300">
                 {Math.floor(maxSlots * entryFee * (activeRoom === '1-10' ? 0.1 : 0.15)).toLocaleString()} ETB
@@ -894,7 +891,7 @@ export function WheelOfChance({
             <div className="flex items-center justify-between text-xs">
               <div className="flex items-center gap-1.5">
                 <span className="text-base">🥉</span>
-                <span className="font-bold text-zinc-300 font-sans">3rd Place (Copper):</span>
+                <span className="font-bold text-gray-700 dark:text-zinc-300 font-sans">3rd Place (Copper):</span>
               </div>
               {activeRoom === '1-20' ? (
                 <span className="font-mono font-black text-amber-600">
@@ -909,15 +906,15 @@ export function WheelOfChance({
       </div>
 
       {/* Recent History List */}
-      {currentHistory.length > 0 && (
-        <div className="mx-4 mt-4 bg-zinc-900/60 border border-zinc-800/80 rounded-2xl p-4 shadow-xl mb-4">
-          <h3 className="text-[10px] font-black uppercase text-zinc-500 tracking-wider flex items-center gap-1.5 mb-3">
+      {currentHistory.length > 0 && phase === 'lobby' && (
+        <div className="mx-4 mt-4 bg-gray-100 dark:bg-zinc-900/60 border border-gray-200 dark:border-zinc-800/80 rounded-2xl p-4 shadow-xl mb-4">
+          <h3 className="text-[10px] font-black uppercase text-gray-500 dark:text-zinc-500 tracking-wider flex items-center gap-1.5 mb-3">
             <RefreshCw className="w-3 h-3" /> Recent Winners
           </h3>
           <div className="space-y-2">
             {currentHistory.slice(0, 10).map((h, index) => (
-              <div key={`${h.roundId}-${index}`} className="flex justify-between items-center text-xs bg-zinc-950/50 p-2.5 rounded-xl border border-zinc-800/40">
-                <span className="font-black text-zinc-400">#{h.roundId}</span>
+              <div key={`${h.roundId}-${index}`} className="flex justify-between items-center text-xs bg-gray-50 dark:bg-zinc-950/50 p-2.5 rounded-xl border border-gray-100 dark:border-zinc-800/40">
+                <span className="font-black text-gray-500 dark:text-zinc-400">#{h.roundId}</span>
                 <div className="flex gap-2 font-mono font-bold">
                   {h.winners[1] && <span className="text-yellow-400">1st-{h.winners[1]}</span>}
                   {h.winners[2] && <span className="text-zinc-300">2nd-{h.winners[2]}</span>}

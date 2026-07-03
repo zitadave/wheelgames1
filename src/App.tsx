@@ -575,6 +575,9 @@ export default function App() {
             >
               {/* Wheel Canvas & Quick Arena Label */}
               <div className="relative mx-auto flex flex-col items-center my-auto">
+                <div className="absolute -top-4 -right-4 z-20 text-[10px] font-black uppercase text-blue-500 bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 rounded-full tracking-widest">
+                  Round #{roomState?.roundId || '...'}
+                </div>
                 <Wheel status={roomState?.status || 'betting'} winner={roomState?.winner} soundTicks={soundTicks} timeLeft={roomState?.timeLeft} />
               </div>
 
@@ -701,26 +704,24 @@ export default function App() {
                   {/* Recent round mini list */}
                   {history.length > 0 && (
                     <div className="bg-white dark:bg-gray-900 rounded-xl p-3 border border-gray-200 dark:border-gray-800 transition-colors">
-                      <div className="flex justify-between items-center mb-1.5">
+                      <div className="flex justify-between items-center mb-2">
                         <h3 className="text-[10px] font-black uppercase text-gray-400 tracking-wider flex items-center gap-1">
                           <History className="w-3 h-3" /> Recent History
                         </h3>
-                        <span className="text-[9px] font-semibold text-gray-400">Showing last 5</span>
+                        <span className="text-[9px] font-semibold text-gray-400">Showing last 10</span>
                       </div>
-                      <div className="grid grid-cols-5 gap-1.5">
-                        {history.slice(0, 5).map((h) => (
+                      <div className="space-y-2">
+                        {history.slice(0, 10).map((h, index) => (
                           <div 
-                            key={h.roundId} 
-                            className={`flex flex-col items-center justify-center py-1.5 rounded-lg border text-center transition-all ${
-                              h.winner % 2 === 0 
-                                ? 'bg-red-500/5 dark:bg-red-950/15 border-red-200 dark:border-red-900/45 text-red-600 dark:text-red-400' 
-                                : 'bg-blue-50/10 dark:bg-blue-950/15 border-blue-200 dark:border-blue-900/45 text-blue-600 dark:text-blue-400'
-                            }`}
+                            key={`${h.roundId}-${index}`} 
+                            className="flex justify-between items-center text-xs bg-gray-50 dark:bg-gray-950 p-2.5 rounded-xl border border-gray-100 dark:border-gray-800"
                           >
-                            <span className="text-xs font-black font-mono">{h.winner}</span>
-                            <span className="text-[8px] font-black uppercase tracking-tighter opacity-80 mt-0.5">
-                              {h.winner % 2 === 0 ? 'ሞላ' : 'ጎደል'}
-                            </span>
+                            <span className="font-black text-gray-400">#{h.roundId}</span>
+                            <div className="flex gap-2 font-mono font-bold">
+                               <span className={h.winner % 2 === 0 ? 'text-red-500' : 'text-blue-500'}>
+                                 Winner: {h.winner} ({h.winner % 2 === 0 ? 'ሞላ' : 'ጎደል'})
+                               </span>
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -736,6 +737,7 @@ export default function App() {
                   setBalance={setBalance}
                   showNotification={showNotification}
                   setTransactions={setTransactions}
+                  setGameHistory={setGameHistory}
                   isDarkMode={isDarkMode}
                   soundTicks={soundTicks}
                   onTheaterModeChange={setIsJackpotTheaterMode}
@@ -751,6 +753,7 @@ export default function App() {
                   balance={balance}
                   setBalance={setBalance}
                   setTransactions={setTransactions}
+                  setGameHistory={setGameHistory}
                   isDarkMode={isDarkMode}
                   soundTicks={soundTicks}
                   onBack={() => setActiveTab('even_odd')}
@@ -1041,8 +1044,8 @@ export default function App() {
                       <History className="w-4 h-4 mr-1" /> Transaction History
                     </h3>
                     <div className="space-y-2 divide-y divide-gray-100 dark:divide-gray-800/40">
-                      {transactions.map((tx) => (
-                        <div key={tx.id} className="flex justify-between items-center pt-2.5 first:pt-0">
+                      {transactions.map((tx, index) => (
+                        <div key={`${tx.id}-${index}`} className="flex justify-between items-center pt-2.5 first:pt-0">
                           <div>
                             <div className="text-xs font-bold text-gray-800 dark:text-gray-200">{tx.desc}</div>
                             <div className="text-[10px] text-gray-400 font-medium mt-0.5">{tx.date}</div>
@@ -1060,8 +1063,8 @@ export default function App() {
                       <TrendingUp className="w-4 h-4 mr-1" /> Play History
                     </h3>
                     <div className="space-y-3">
-                      {gameHistory.map((log) => (
-                        <div key={log.id} className="bg-gray-50 dark:bg-gray-950 border border-gray-100 dark:border-gray-800/50 rounded-xl p-3 shadow-xs flex justify-between items-center">
+                      {gameHistory.map((log, index) => (
+                        <div key={`${log.id}-${index}`} className="bg-gray-50 dark:bg-gray-950 border border-gray-100 dark:border-gray-800/50 rounded-xl p-3 shadow-xs flex justify-between items-center">
                           <div className="space-y-1">
                             <div className="flex items-center gap-1.5">
                               <span className="text-[10px] font-black uppercase text-blue-500 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-1.5 py-0.5 rounded">
@@ -1178,7 +1181,7 @@ export default function App() {
                     .map((player, index) => {
                       const isCurrentUser = player.id === userId;
                       return (
-                        <div key={player.id} className={`flex items-center justify-between py-2.5 transition-colors ${isCurrentUser ? 'bg-blue-50/40 dark:bg-blue-950/10 px-2 rounded-xl border border-blue-100/30 dark:border-blue-900/10' : ''}`}>
+                        <div key={`${player.id}-${index}`} className={`flex items-center justify-between py-2.5 transition-colors ${isCurrentUser ? 'bg-blue-50/40 dark:bg-blue-950/10 px-2 rounded-xl border border-blue-100/30 dark:border-blue-900/10' : ''}`}>
                           <div className="flex items-center gap-2.5">
                             {/* Rank Badge */}
                             <span className="font-mono text-xs font-bold text-gray-400 dark:text-gray-500 w-5 shrink-0">

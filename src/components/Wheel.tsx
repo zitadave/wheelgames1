@@ -32,7 +32,7 @@ export const Wheel = React.memo(function Wheel({ status, winner, soundTicks, tim
       const randomOffset = (Math.random() - 0.5) * 40;
       
       const duration = timeLeft !== undefined && timeLeft > 0 ? timeLeft : 60;
-      const spins = Math.max(Math.floor(duration * 1.3), 5); // Roughly 1.3 spins per second left
+      const spins = Math.max(Math.floor(duration * 3), 15); // Increased spins for a much faster start
       const targetRotation = 360 * spins + (targetIndex * 60) + randomOffset; 
 
       // Launch haptic and sound
@@ -42,10 +42,10 @@ export const Wheel = React.memo(function Wheel({ status, winner, soundTicks, tim
       const currentRot = rotate.get() % 360;
       rotate.set(currentRot);
       
-      // Extremely rapid launch [0.05, 0.95, 0.05, 1.0] and smooth, heavy deceleration
+      // Extremely rapid launch and very very super slow deceleration
       animationControls = animate(rotate, targetRotation, {
         duration: duration,
-        ease: [0.05, 0.95, 0.05, 1.0],
+        ease: (progress) => 1 - Math.pow(1 - progress, 7),
         onUpdate: (latest) => {
           sessionStorage.setItem('wheelRotation', latest.toString());
           const currentSegment = Math.floor((latest + 30) / 60);

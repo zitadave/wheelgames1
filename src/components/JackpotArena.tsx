@@ -8,6 +8,7 @@ interface JackpotArenaProps {
   setBalance: React.Dispatch<React.SetStateAction<number>>;
   showNotification: (message: string, type: 'success' | 'error' | 'info') => void;
   setTransactions: React.Dispatch<React.SetStateAction<any[]>>;
+  setGameHistory: React.Dispatch<React.SetStateAction<any[]>>;
   isDarkMode: boolean;
   soundTicks: boolean;
   onTheaterModeChange?: (active: boolean) => void;
@@ -17,6 +18,11 @@ interface JackpotArenaProps {
 }
 
 type JackpotTier = 'mini' | 'grand';
+
+interface JackpotHistoryItem {
+  roundId: number;
+  winners: { 1?: number; 2?: number; 3?: number };
+}
 
 interface Participant {
   username: string;
@@ -28,6 +34,7 @@ export function JackpotArena({
   setBalance,
   showNotification,
   setTransactions,
+  setGameHistory,
   isDarkMode,
   soundTicks,
   onTheaterModeChange,
@@ -57,6 +64,18 @@ export function JackpotArena({
   const [drawNumber, setDrawNumber] = useState<1 | 2 | 3>(1);
   const [winners, setWinners] = useState<{ first?: number; second?: number; third?: number }>({});
   const [vaporizedSlots, setVaporizedSlots] = useState<number[]>([]);
+
+  const [roundIds, setRoundIds] = useState<{ mini: number; grand: number }>(() => ({
+    mini: Math.floor(Math.random() * 9000) + 1000,
+    grand: Math.floor(Math.random() * 9000) + 1000
+  }));
+  const [history, setHistory] = useState<{ mini: JackpotHistoryItem[]; grand: JackpotHistoryItem[] }>({
+    mini: [],
+    grand: []
+  });
+
+  const currentRoundId = roundIds[tier];
+  const currentHistory = history[tier];
 
   // Animation States
   const [freezeCountdown, setFreezeCountdown] = useState<number>(10);
@@ -119,21 +138,27 @@ export function JackpotArena({
   const setTargetGrid = tier === 'mini' ? setMiniGrid : setGrandGrid;
 
   // Sync theater mode status up to parent
+  const lastTheaterModeRef = useRef<boolean>(false);
   useEffect(() => {
-    if (onTheaterModeChange) {
-      onTheaterModeChange(
-        gamePhase === 'drawing' ||
-        gamePhase === 'winner' ||
-        gamePhase === 'vaporizing' ||
-        gamePhase === 'complete'
-      );
+    const isTheater =
+      gamePhase === 'drawing' ||
+      gamePhase === 'winner' ||
+      gamePhase === 'vaporizing' ||
+      gamePhase === 'complete';
+
+    if (onTheaterModeChange && lastTheaterModeRef.current !== isTheater) {
+      lastTheaterModeRef.current = isTheater;
+      onTheaterModeChange(isTheater);
     }
+  }, [gamePhase, onTheaterModeChange]);
+
+  useEffect(() => {
     return () => {
-      if (onTheaterModeChange) {
+      if (onTheaterModeChange && lastTheaterModeRef.current) {
         onTheaterModeChange(false);
       }
     };
-  }, [gamePhase, onTheaterModeChange]);
+  }, [onTheaterModeChange]);
 
   // Sound generator
   const playHapticAudio = (freq = 600) => {
@@ -170,7 +195,7 @@ export function JackpotArena({
     } catch (e) {}
   };
 
-  // Populate grids initially with 65% filled
+  // Populate grids initially with 65% filled and recover interrupted phase
   useEffect(() => {
     const savedState = sessionStorage.getItem('jackpotArenaState');
     if (savedState) {
@@ -180,15 +205,35 @@ export function JackpotArena({
         setDrawNumber(state.drawNumber);
         setWinners(state.winners);
         setVaporizedSlots(state.vaporizedSlots);
-        setTargetGrid(state.grid);
+        if (state.tier === 'mini') {
+          setMiniGrid(state.grid);
+        } else {
+          setGrandGrid(state.grid);
+        }
         setTier(state.tier);
+
+        // Safely recover active draw phase on mount
+        if (state.gamePhase !== 'lobby') {
+          if (state.gamePhase === 'drawing') {
+            executeSequentialDraw(state.drawNumber);
+          } else if (state.gamePhase === 'winner' || state.gamePhase === 'vaporizing') {
+            if (state.drawNumber < 3) {
+              executeSequentialDraw((state.drawNumber + 1) as 2 | 3);
+            } else {
+              setGamePhase('complete');
+              trackTimeout(() => resetLobby(), 6000);
+            }
+          } else if (state.gamePhase === 'complete') {
+            trackTimeout(() => resetLobby(), 6000);
+          }
+        }
       } catch (e) {
         resetLobby();
       }
     } else {
       resetLobby();
     }
-  }, [tier]);
+  }, []);
 
   // Persist state
   useEffect(() => {
@@ -202,25 +247,6 @@ export function JackpotArena({
     }));
   }, [gamePhase, drawNumber, winners, vaporizedSlots, activeGrid, tier]);
 
-  // Recover interrupted game phases
-  useEffect(() => {
-    if (activeTimers.current.length === 0) {
-      if (gamePhase === 'drawing') {
-        executeSequentialDraw(drawNumber);
-      } else if (gamePhase === 'winner' || gamePhase === 'vaporizing') {
-        // Fast forward to next step
-        if (drawNumber < 3) {
-          executeSequentialDraw((drawNumber + 1) as 2 | 3);
-        } else {
-          setGamePhase('complete');
-          trackTimeout(() => resetLobby(), 6000);
-        }
-      } else if (gamePhase === 'complete') {
-        trackTimeout(() => resetLobby(), 6000);
-      }
-    }
-  }, [gamePhase]);
-
   const resetLobby = () => {
     sessionStorage.removeItem('odometerStartTime');
     sessionStorage.removeItem('jackpotArenaState');
@@ -233,6 +259,7 @@ export function JackpotArena({
     setReelHundred('0');
     setReelTen('0');
     setReelOne('0');
+    setRoundIds(prev => ({ ...prev, [tier]: prev[tier] + 1 }));
   };
 
   const triggerGlobalFreeze = () => {
@@ -387,6 +414,20 @@ export function JackpotArena({
       if (drawIndex === 1) updated.first = winnerNum;
       else if (drawIndex === 2) updated.second = winnerNum;
       else updated.third = winnerNum;
+
+      if (drawIndex === 3) {
+        setHistory(h => {
+          if (h[tier].some((x: any) => x.roundId === currentRoundId)) return h;
+          return {
+            ...h,
+            [tier]: [
+              { roundId: currentRoundId, winners: { 1: updated.first, 2: updated.second, 3: updated.third } },
+              ...h[tier]
+            ].slice(0, 10)
+          };
+        });
+      }
+
       return updated;
     });
 
@@ -411,8 +452,37 @@ export function JackpotArena({
         { id: Date.now(), type: 'win', desc: `🏆 Jackpot ${drawIndex}st Place Win!`, amount: prize, date: 'Just now', positive: true },
         ...prev
       ]);
+      setGameHistory(prev => [
+        {
+          id: `R#${currentRoundId}`,
+          type: `Jackpot ${tier}`,
+          bet: currentConfig.entry,
+          numbers: winnerNum.toString(),
+          date: new Date().toLocaleString(),
+          result: `${drawIndex === 1 ? '1st' : drawIndex === 2 ? '2nd' : '3rd'} Place Win`,
+          change: prize,
+          status: 'Completed'
+        },
+        ...prev
+      ]);
       showNotification(`🎉 Congratulations! You won the Jackpot ${drawIndex === 1 ? '1st' : drawIndex === 2 ? '2nd' : '3rd'} Place Prize of ${prize.toLocaleString()} ETB!`, 'success');
     } else {
+      const selfClaimed = Object.values(activeGrid).some((c: any) => c.isSelf);
+      if (selfClaimed && drawIndex === 3) { // Only log miss on the 3rd draw for jackpot
+           setGameHistory(prev => [
+             {
+               id: `R#${currentRoundId}`,
+               type: `Jackpot ${tier}`,
+               bet: currentConfig.entry,
+               numbers: '-',
+               date: new Date().toLocaleString(),
+               result: 'Miss',
+               change: 0,
+               status: 'Completed'
+             },
+             ...prev
+           ]);
+      }
       showNotification(`Coordinate #${winnerNum} ([🔒 ${activeGrid[winnerNum]?.username || 'Player'}]) claims ${drawIndex === 1 ? '1st' : drawIndex === 2 ? '2nd' : '3rd'} Place!`, 'info');
     }
 
@@ -511,7 +581,8 @@ export function JackpotArena({
 
       {/* Room Category Tabs */}
       {!isTheaterActive && (
-        <div className="grid grid-cols-2 gap-2 bg-gray-200/60 dark:bg-gray-900/60 p-1 rounded-xl mb-4 shrink-0 border border-gray-300/40 dark:border-gray-800/40">
+        <>
+          <div className="grid grid-cols-2 gap-2 bg-gray-200/60 dark:bg-gray-900/60 p-1 rounded-xl mb-4 shrink-0 border border-gray-300/40 dark:border-gray-800/40">
           <button
             onClick={() => gamePhase === 'lobby' && setTier('mini')}
             disabled={gamePhase !== 'lobby'}
@@ -535,6 +606,7 @@ export function JackpotArena({
             <Crown className="w-3.5 h-3.5 text-yellow-500" /> VIP Grand (1-100)
           </button>
         </div>
+        </>
       )}
 
       {/* 2-Digit Mechanical Odometer Reels (High-fidelity physical canvas reels) */}
@@ -606,6 +678,7 @@ export function JackpotArena({
 
       {/* 3D Trophy Podium Section (No label, placed under the selectors) */}
       {!isTheaterActive && (
+        <>
         <div className="bg-slate-950/50 p-2.5 rounded-2xl border border-zinc-800/60 mb-3 shadow-inner">
           <div className="flex items-end justify-center gap-2 pt-2 pb-1">
             
@@ -677,6 +750,7 @@ export function JackpotArena({
 
           </div>
         </div>
+        </>
       )}
 
       {/* Grid coordinates list with scroll support */}
@@ -688,6 +762,9 @@ export function JackpotArena({
             <span className="text-sm font-black uppercase text-blue-600 dark:text-blue-400 tracking-wider">
               {Object.keys(activeGrid).length}/{currentConfig.slots} Claimed
             </span>
+            <div className="text-[10px] font-black uppercase text-blue-500 bg-blue-500/10 border border-blue-500/20 px-2.5 py-0.5 rounded-full tracking-widest">
+              Round #{currentRoundId}
+            </div>
           </div>
         )}
 
@@ -763,6 +840,27 @@ export function JackpotArena({
             );
           })}
         </div>
+
+        {/* Jackpot Recent History at the bottom of the scroll view */}
+        {currentHistory.length > 0 && (
+          <div className="bg-zinc-950/60 border border-zinc-800/80 rounded-2xl p-4 shadow-xl mt-4">
+            <h3 className="text-[10px] font-black uppercase text-zinc-500 tracking-wider flex items-center gap-1.5 mb-3">
+              <RefreshCw className="w-3 h-3" /> Recent Winners
+            </h3>
+            <div className="space-y-2">
+              {currentHistory.map((h, index) => (
+                <div key={`${h.roundId}-${index}`} className="flex justify-between items-center text-xs bg-zinc-950/50 p-2.5 rounded-xl border border-zinc-800/40">
+                  <span className="font-black text-zinc-400">#{h.roundId}</span>
+                  <div className="flex gap-2 font-mono font-bold">
+                    {h.winners[1] && <span className="text-yellow-400">1st-{h.winners[1]}</span>}
+                    {h.winners[2] && <span className="text-zinc-300">2nd-{h.winners[2]}</span>}
+                    {h.winners[3] && <span className="text-amber-600">3rd-{h.winners[3]}</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Global Locked Phase 1 Translucent Modal overlay */}

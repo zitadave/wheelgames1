@@ -6,6 +6,7 @@ interface WheelOfChanceProps {
   balance: number;
   setBalance: React.Dispatch<React.SetStateAction<number>>;
   setTransactions: React.Dispatch<React.SetStateAction<any[]>>;
+  setGameHistory: React.Dispatch<React.SetStateAction<any[]>>;
   isDarkMode: boolean;
   soundTicks: boolean;
   onBack?: () => void;
@@ -15,10 +16,16 @@ interface WheelOfChanceProps {
 
 type GamePhase = 'lobby' | 'countdown' | 'spinning' | 'announcing' | 'complete';
 
+interface ChanceHistoryItem {
+  roundId: number;
+  winners: { 1?: number; 2?: number; 3?: number };
+}
+
 export function WheelOfChance({
   balance,
   setBalance,
   setTransactions,
+  setGameHistory,
   isDarkMode,
   soundTicks: parentSoundTicks,
   onBack,
@@ -51,6 +58,17 @@ export function WheelOfChance({
   const [winners, setWinners] = useState<{ 1?: number; 2?: number; 3?: number }>({});
   const [justDrawnWinner, setJustDrawnWinner] = useState<number | null>(null);
   const [statusFilament, setStatusFilament] = useState<string>('• Room open. Reserve your ticket to start...');
+  const [roundIds, setRoundIds] = useState<{ '1-10': number; '1-20': number }>(() => ({
+    '1-10': Math.floor(Math.random() * 9000) + 1000,
+    '1-20': Math.floor(Math.random() * 9000) + 1000
+  }));
+  const [history, setHistory] = useState<{ '1-10': ChanceHistoryItem[]; '1-20': ChanceHistoryItem[] }>({
+    '1-10': [],
+    '1-20': []
+  });
+
+  const currentRoundId = roundIds[activeRoom];
+  const currentHistory = history[activeRoom];
 
   // Restore state on mount
   useEffect(() => {
@@ -171,6 +189,10 @@ export function WheelOfChance({
     setWinners({});
     setJustDrawnWinner(null);
     setStatusFilament('• Room open. Reserve your ticket to start...');
+    setRoundIds(prev => ({
+      ...prev,
+      [activeRoom]: prev[activeRoom] + 1
+    }));
 
     setClaimedSlots({});
     setActiveSectors(Array.from({ length: maxSlots }, (_, i) => i + 1));
@@ -299,7 +321,7 @@ export function WheelOfChance({
     const offsetOfSlice = (sectorIndex + randomFraction) * sliceAngle;
     
     // Use 8 full rotations instead of 80 to allow a smooth, gradual ease-out deceleration
-    const targetRotation = 360 * 8 + 270 - offsetOfSlice;
+    const targetRotation = 360 * 50 + 270 - offsetOfSlice; // Increased spins to 50 for a longer fast spin
 
     const startRotation = rotationRef.current;
     const distance = targetRotation - startRotation;
@@ -313,8 +335,8 @@ export function WheelOfChance({
       const elapsed = now - startTime;
       const progress = Math.min(elapsed / duration, 1);
 
-      // Super slow suspenseful ease-out curve that starts fast but slows down to a crawl at the end
-      const ease = Math.pow(progress, 0.22) * (1 - Math.pow(1 - progress, 180));
+      // Perfectly smooth continuous curve for a fast start and a sloth-like crawl at the end
+      const ease = 1 - Math.pow(1 - progress, 7);
       rotationRef.current = startRotation + distance * ease;
 
       // Click sound tick
@@ -331,7 +353,19 @@ export function WheelOfChance({
         isSpinningRef.current = false;
         
         setJustDrawnWinner(winningSectorVal);
-        setWinners(prev => ({ ...prev, [thisDraw]: winningSectorVal }));
+        setWinners(prev => {
+          const newWinners = { ...prev, [thisDraw]: winningSectorVal };
+          if (thisDraw === (activeRoom === '1-10' ? 2 : 3)) {
+            setHistory(h => {
+              if (h[activeRoom].some((x: any) => x.roundId === currentRoundId)) return h;
+              return {
+                ...h,
+                [activeRoom]: [{ roundId: currentRoundId, winners: newWinners }, ...h[activeRoom]].slice(0, 10)
+              };
+            });
+          }
+          return newWinners;
+        });
         
         // Wait 1.5s to allow the final frame to render and look fully stopped before announcement
         setTimeout(() => {
@@ -367,12 +401,47 @@ export function WheelOfChance({
             { id: Date.now(), type: 'reward', desc: `🏆 P2P ${tierName} Grand Victory (#${winningSectorVal})`, amount: payoutAmount, date: 'Just now', positive: true },
             ...prev
           ]);
+          setGameHistory(prev => [
+            {
+              id: `R#${currentRoundId}`,
+              type: `Chance ${activeRoom}`,
+              bet: entryFee,
+              numbers: winningSectorVal.toString(),
+              date: new Date().toLocaleString(),
+              result: `${tierName} Win`,
+              change: payoutAmount,
+              status: 'Completed'
+            },
+            ...prev
+          ]);
           playBeep(880, 0.4, 'sine');
           setTimeout(() => {
             if (!isMounted.current) return;
             playBeep(1320, 0.4, 'sine');
           }, 120);
         } else {
+          // If the user participated but didn't win this specific draw, log it as a loss ONLY if it's the last draw for the room
+          // Alternatively, we can log the loss for the entire round later. Let's just log a loss right now if they didn't win.
+          const selfClaimed = Object.values(claimedSlots).some((c: any) => c.isSelf);
+          if (selfClaimed) {
+             setGameHistory(prev => {
+                // To avoid duplicate loss logs per round, only log if not already there, but since each draw is a different event, it's fine.
+                // Wait, it's better to log the outcome.
+                return [
+                  {
+                    id: `R#${currentRoundId}`,
+                    type: `Chance ${activeRoom}`,
+                    bet: entryFee,
+                    numbers: '-',
+                    date: new Date().toLocaleString(),
+                    result: 'Miss',
+                    change: 0, // They lost the bet earlier
+                    status: 'Completed'
+                  },
+                  ...prev
+                ];
+             });
+          }
           playBeep(523, 0.25, 'sine');
         }
 
@@ -556,7 +625,10 @@ export function WheelOfChance({
     <div className="flex-1 flex flex-col justify-start text-white select-none relative pb-6">
       
       {/* 1. Room Switcher Tabs - Rendered at the absolute top */}
-      <div className="flex justify-center mt-1 mb-3 shrink-0">
+      <div className="flex flex-col items-center mt-1 mb-3 shrink-0 gap-2">
+        <div className="text-[10px] font-black uppercase text-blue-400 bg-blue-500/10 border border-blue-500/20 px-2.5 py-0.5 rounded-full tracking-widest">
+          Round #{currentRoundId}
+        </div>
         <div className="inline-flex bg-zinc-900/80 p-1 rounded-full border border-zinc-800">
           <button
             onClick={() => {
@@ -825,6 +897,27 @@ export function WheelOfChance({
           </div>
         </div>
       </div>
+
+      {/* Recent History List */}
+      {currentHistory.length > 0 && (
+        <div className="mx-4 mt-4 bg-zinc-900/60 border border-zinc-800/80 rounded-2xl p-4 shadow-xl mb-4">
+          <h3 className="text-[10px] font-black uppercase text-zinc-500 tracking-wider flex items-center gap-1.5 mb-3">
+            <RefreshCw className="w-3 h-3" /> Recent Winners
+          </h3>
+          <div className="space-y-2">
+            {currentHistory.slice(0, 10).map((h, index) => (
+              <div key={`${h.roundId}-${index}`} className="flex justify-between items-center text-xs bg-zinc-950/50 p-2.5 rounded-xl border border-zinc-800/40">
+                <span className="font-black text-zinc-400">#{h.roundId}</span>
+                <div className="flex gap-2 font-mono font-bold">
+                  {h.winners[1] && <span className="text-yellow-400">1st-{h.winners[1]}</span>}
+                  {h.winners[2] && <span className="text-zinc-300">2nd-{h.winners[2]}</span>}
+                  {h.winners[3] && <span className="text-amber-600">3rd-{h.winners[3]}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
     </div>
   );

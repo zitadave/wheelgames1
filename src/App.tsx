@@ -105,7 +105,7 @@ export default function App() {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, []);
 
-  const [betAmount, setBetAmount] = useState<number>(1000);
+  const [betAmount, setBetAmount] = useState<number>(200);
   const [partialBet, setPartialBet] = useState<boolean>(true);
   const [showResult, setShowResult] = useState<boolean>(false);
   const [lastWinner, setLastWinner] = useState<number | null>(null);
@@ -478,6 +478,11 @@ export default function App() {
       return;
     }
 
+    if (targetAmount < 200) {
+      showNotification("Minimum bet is 200 ETB", "error");
+      return;
+    }
+
     const myBet = roomState.players[userId];
     const currentBetAmount = myBet ? myBet.amount : 0;
     const diff = targetAmount - currentBetAmount;
@@ -689,7 +694,7 @@ export default function App() {
                 <div className="px-4 space-y-4 mt-auto">
                   {/* Shortcut Amounts Grid */}
                   <div className="flex gap-2 justify-center">
-                    {[1000, 2000, 5000, 10000].map(amt => (
+                    {[200, 1000, 2000, 5000].map(amt => (
                       <button
                         key={amt}
                         onClick={() => setBetAmount(amt)}
@@ -711,7 +716,7 @@ export default function App() {
                       <div className={`absolute inset-0 bg-white/60 dark:bg-gray-900/60 transition-all duration-300 -z-10 ${!isInputFocused ? 'backdrop-blur-[2px]' : 'backdrop-blur-none'}`} />
                       <input
                         type="number"
-                        min="10"
+                        min="200"
                         step="10"
                         value={betAmount || ''}
                         onFocus={() => setIsInputFocused(true)}

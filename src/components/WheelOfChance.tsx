@@ -325,7 +325,7 @@ export function WheelOfChance({
 
     const startRotation = rotationRef.current;
     const distance = targetRotation - startRotation;
-    const duration = 18000; // 18 seconds spin duration for incredible suspense
+    const duration = 30000; // 30 seconds for maximum suspense as requested
     const startTime = performance.now();
 
     let lastTickAngle = 0;
@@ -335,8 +335,8 @@ export function WheelOfChance({
       const elapsed = now - startTime;
       const progress = Math.min(elapsed / duration, 1);
 
-      // Perfectly smooth continuous curve for a fast start and a sloth-like crawl at the end
-      const ease = 1 - Math.pow(1 - progress, 7);
+      // Perfectly smooth continuous curve for a fast start and a sloth-like crawl at the end (increased exponent for slower easy-out)
+      const ease = 1 - Math.pow(1 - progress, 12);
       rotationRef.current = startRotation + distance * ease;
 
       // Click sound tick
@@ -367,11 +367,11 @@ export function WheelOfChance({
           return newWinners;
         });
         
-        // Wait 1.5s to allow the final frame to render and look fully stopped before announcement
+        // Wait 0.1s to allow the final frame to render and look fully stopped before announcement
         setTimeout(() => {
           if (!isMounted.current) return;
           setPhase('announcing');
-        }, 1500);
+        }, 100);
 
         // Payout Calculations based on room & draw tier
         const grossPool = maxSlots * entryFee;
@@ -483,7 +483,7 @@ export function WheelOfChance({
               resetRoom();
             }, 500);
           }
-        }, 5000); // 5 seconds announcement pop-up
+        }, 2000); // 2 seconds announcement pop-up (decreased from 5s)
       }
     };
 

@@ -47,7 +47,6 @@ export const Wheel = React.memo(function Wheel({ status, winner, soundTicks, tim
         duration: duration,
         ease: (progress) => 1 - Math.pow(1 - progress, 7),
         onUpdate: (latest) => {
-          sessionStorage.setItem('wheelRotation', latest.toString());
           const currentSegment = Math.floor((latest + 30) / 60);
           if (currentSegment !== lastTickSegment.current) {
             const now = Date.now();
@@ -59,6 +58,9 @@ export const Wheel = React.memo(function Wheel({ status, winner, soundTicks, tim
             }
             lastTickSegment.current = currentSegment;
           }
+        },
+        onComplete: () => {
+          sessionStorage.setItem('wheelRotation', rotate.get().toString());
         }
       });
     } else if (status === 'betting' || status === 'balancing') {
@@ -88,7 +90,9 @@ export const Wheel = React.memo(function Wheel({ status, winner, soundTicks, tim
           animationControls = animate(rotate, targetRotation, {
             duration: 0.8,
             ease: "easeOut",
-            onUpdate: (latest) => sessionStorage.setItem('wheelRotation', latest.toString())
+            onComplete: () => {
+              sessionStorage.setItem('wheelRotation', rotate.get().toString());
+            }
           });
         }
       }
@@ -99,6 +103,10 @@ export const Wheel = React.memo(function Wheel({ status, winner, soundTicks, tim
       if (animationControls) {
         animationControls.stop();
       }
+      // Save current resting rotation for seamless continuity
+      try {
+        sessionStorage.setItem('wheelRotation', rotate.get().toString());
+      } catch (e) {}
     };
   }, [status, winner, rotate]);
 
@@ -154,8 +162,13 @@ export const Wheel = React.memo(function Wheel({ status, winner, soundTicks, tim
       
       {/* Wheel Canvas */}
       <motion.div 
-        className="w-full h-full rounded-full border border-gray-200 dark:border-gray-800 shadow-[0_20px_50px_rgba(0,0,0,0.35)] dark:shadow-[0_20px_50px_rgba(0,0,0,0.7)] overflow-hidden relative"
-        style={{ rotate }}
+        className="w-full h-full rounded-full border border-gray-200 dark:border-gray-800 shadow-[0_20px_50px_rgba(0,0,0,0.35)] dark:shadow-[0_20px_50px_rgba(0,0,0,0.7)] overflow-hidden relative will-change-transform"
+        style={{ 
+          rotate,
+          backfaceVisibility: 'hidden',
+          WebkitBackfaceVisibility: 'hidden',
+          transform: 'translate3d(0, 0, 0)'
+        }}
       >
         <svg viewBox="0 0 100 100" className="w-full h-full transform -rotate-90">
           <g transform="rotate(-30 50 50)">

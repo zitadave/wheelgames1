@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Coins, Lock, Check, Trophy, Sparkles, Zap, RefreshCw, Volume2, VolumeX, Medal } from 'lucide-react';
+import { Coins, Lock, Check, Trophy, Sparkles, Zap, RefreshCw, Volume2, VolumeX, Medal, Info, X } from 'lucide-react';
 
 interface WheelOfChanceProps {
   balance: number;
@@ -43,6 +43,7 @@ export const WheelOfChance = React.memo(function WheelOfChance({
 
   // Active room selection
   const [activeRoom, setActiveRoom] = useState<'1-10' | '1-20'>('1-10');
+  const [isInfoOpen, setIsInfoOpen] = useState<boolean>(false);
   const maxSlots = activeRoom === '1-10' ? 10 : 20;
   const entryFee = activeRoom === '1-10' ? 500 : 1000; // ETB
 
@@ -50,6 +51,7 @@ export const WheelOfChance = React.memo(function WheelOfChance({
   const [phase, setPhase] = useState<GamePhase>('lobby');
   const [countdown, setCountdown] = useState<number>(5);
   const [claimedSlots, setClaimedSlots] = useState<{ [key: number]: { isSelf: boolean; username: string; photoUrl?: string } }>({});
+  const serverWinnersRef = useRef<any>(null);
   
   // Realtime syncing
   useEffect(() => {
@@ -59,12 +61,26 @@ export const WheelOfChance = React.memo(function WheelOfChance({
     
     const onGridState = (state: any) => {
        if (!state) return;
+       
+       if (state.roundId) {
+         setRoundIds(prev => ({
+           ...prev,
+           [activeRoom]: state.roundId
+         }));
+       }
+       
        const newClaimed: any = {};
        Object.keys(state.claimedSlots).forEach((k) => {
          const slot = state.claimedSlots[k as any];
          newClaimed[Number(k)] = { ...slot, isSelf: slot.userId === userId };
        });
        setClaimedSlots(newClaimed);
+       
+       if (state.winners) {
+         serverWinnersRef.current = state.winners;
+       } else {
+         serverWinnersRef.current = null;
+       }
        
        if (Object.keys(newClaimed).length === maxSlots && phase === 'lobby') {
           startCountdown();
@@ -118,6 +134,9 @@ export const WheelOfChance = React.memo(function WheelOfChance({
         setWinners(state.winners);
         setJustDrawnWinner(state.justDrawnWinner);
         setStatusFilament(state.statusFilament);
+        if (state.serverWinners) {
+          serverWinnersRef.current = state.serverWinners;
+        }
         if (state.rotation) {
           rotationRef.current = state.rotation;
         }
@@ -140,6 +159,7 @@ export const WheelOfChance = React.memo(function WheelOfChance({
       winners,
       justDrawnWinner,
       statusFilament,
+      serverWinners: serverWinnersRef.current,
       rotation: rotationRef.current
     }));
   }, [phase, countdown, claimedSlots, activeSectors, currentDraw, winners, justDrawnWinner, statusFilament, activeRoom]);
@@ -336,9 +356,14 @@ export const WheelOfChance = React.memo(function WheelOfChance({
 
     isSpinningRef.current = true;
 
-    // Pick a random winner from the remaining active sectors
-    const randIndex = Math.floor(Math.random() * currentSectors.length);
-    const winningSectorVal = currentSectors[randIndex];
+    // Pick a random winner from the remaining active sectors or use predetermined winner from server
+    let winningSectorVal: number;
+    if (serverWinnersRef.current && serverWinnersRef.current[thisDraw]) {
+      winningSectorVal = serverWinnersRef.current[thisDraw];
+    } else {
+      const randIndex = Math.floor(Math.random() * currentSectors.length);
+      winningSectorVal = currentSectors[randIndex];
+    }
 
     // Align rotation so pointer (top, -90 deg, or 270 deg) lands on winningSectorVal
     const totalSectors = currentSectors.length;
@@ -548,11 +573,24 @@ export const WheelOfChance = React.memo(function WheelOfChance({
     if (!ctx) return;
 
     let isDestroyed = false;
+    let animationFrameId: number;
+
+    const dpr = window.devicePixelRatio || 1;
+    const displayWidth = 300;
+    const displayHeight = 300;
+    
+    // Configure canvas backing store for high resolution
+    canvas.width = displayWidth * dpr;
+    canvas.height = displayHeight * dpr;
 
     const draw = () => {
       if (isDestroyed) return;
-      const width = canvas.width;
-      const height = canvas.height;
+
+      ctx.save();
+      ctx.scale(dpr, dpr);
+
+      const width = displayWidth;
+      const height = displayHeight;
       const cx = width / 2;
       const cy = height / 2;
       const radius = width / 2 - 12;
@@ -566,7 +604,11 @@ export const WheelOfChance = React.memo(function WheelOfChance({
       ctx.fill();
 
       const numSectors = activeSectors.length;
-      if (numSectors === 0) return;
+      if (numSectors === 0) {
+        ctx.restore();
+        animationFrameId = requestAnimationFrame(draw);
+        return;
+      }
 
       const sliceAngle = (Math.PI * 2) / numSectors;
       const currentRotationRad = (rotationRef.current * Math.PI) / 180;
@@ -593,8 +635,8 @@ export const WheelOfChance = React.memo(function WheelOfChance({
         ctx.fill();
 
         // Stroke borders
-        ctx.lineWidth = 1.2;
-        ctx.strokeStyle = isDarkMode ? 'rgba(15, 23, 42, 0.35)' : 'rgba(255, 255, 255, 0.4)';
+        ctx.lineWidth = 1.0;
+        ctx.strokeStyle = isDarkMode ? 'rgba(15, 23, 42, 0.35)' : 'rgba(255, 255, 255, 0.45)';
         ctx.stroke();
 
         // Draw label text
@@ -604,7 +646,7 @@ export const WheelOfChance = React.memo(function WheelOfChance({
         ctx.rotate(textAngle);
 
         ctx.fillStyle = isDarkMode ? '#1e293b' : '#334155';
-        ctx.font = 'bold 14px font-mono, system-ui';
+        ctx.font = 'bold 13px font-mono, system-ui';
         ctx.textAlign = 'right';
         ctx.textBaseline = 'middle';
         ctx.fillText(sectorNum.toString(), radius - 20, 0);
@@ -625,7 +667,7 @@ export const WheelOfChance = React.memo(function WheelOfChance({
       ctx.beginPath();
       ctx.arc(cx, cy, 24, 0, Math.PI * 2);
       ctx.fillStyle = isDarkMode ? '#0f172a' : '#ffffff';
-      ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.25)';
       ctx.shadowBlur = 6;
       ctx.fill();
 
@@ -643,15 +685,17 @@ export const WheelOfChance = React.memo(function WheelOfChance({
       ctx.textBaseline = 'middle';
       ctx.fillText(numSectors.toString(), cx, cy);
 
-      requestAnimationFrame(draw);
+      ctx.restore();
+      animationFrameId = requestAnimationFrame(draw);
     };
 
     draw();
 
     return () => {
       isDestroyed = true;
+      cancelAnimationFrame(animationFrameId);
     };
-  }, [activeSectors, justDrawnWinner, phase, isDarkMode]);
+  }, [activeSectors, justDrawnWinner, phase, isDarkMode, claimedSlots]);
 
   const gridCells = Array.from({ length: maxSlots }, (_, i) => i + 1);
 
@@ -835,11 +879,36 @@ export const WheelOfChance = React.memo(function WheelOfChance({
         {phase === 'lobby' && (
           <div className="space-y-4 mb-4">
             <div>
-              <div className="flex justify-between items-center mb-2 px-1">
-                <span className="text-[10px] font-black uppercase text-gray-500 dark:text-zinc-400 tracking-wider">CHOOSE SPOT (Entry: {entryFee} ETB)</span>
-                <span className="text-[10px] font-black text-blue-500 tracking-widest bg-blue-500/10 border border-blue-500/20 px-2.5 py-0.5 rounded-full uppercase">
-                  Round #{currentRoundId}
-                </span>
+              <div className="flex justify-between items-center mb-2 px-1 gap-1.5">
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-[10px] font-black uppercase text-gray-500 dark:text-zinc-400 tracking-wider">CHOOSE SPOT (Entry: {entryFee} ETB)</span>
+                  <span className="text-xs font-black text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse inline-block shadow-sm" />
+                    {Object.keys(claimedSlots).length}/{maxSlots} Spots Claimed
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span className="text-[10px] font-black text-blue-500 tracking-widest bg-blue-500/10 border border-blue-500/20 px-2.5 py-0.5 rounded-full uppercase font-mono">
+                    Round #{currentRoundId}
+                  </span>
+                  <button
+                    onClick={() => setIsInfoOpen(true)}
+                    className="w-5 h-5 rounded-full bg-blue-600 hover:bg-blue-700 text-white transition-all active:scale-95 cursor-pointer flex items-center justify-center shadow-md shadow-blue-500/20"
+                    title="የጨዋታ መረጃ"
+                  >
+                    <span className="font-serif font-black italic text-xs leading-none select-none">i</span>
+                  </button>
+                </div>
+              </div>
+              
+              {/* Real-time progress bar for Wheel of Chance */}
+              <div className="w-full h-1.5 bg-gray-150 dark:bg-zinc-800 rounded-full overflow-hidden shadow-inner mb-4">
+                <motion.div 
+                  className="h-full bg-indigo-600 rounded-full"
+                  initial={{ width: 0 }}
+                  animate={{ width: `${(Object.keys(claimedSlots).length / maxSlots) * 100}%` }}
+                  transition={{ duration: 0.3 }}
+                />
               </div>
 
               <div className="grid grid-cols-5 gap-1.5">
@@ -972,6 +1041,66 @@ export const WheelOfChance = React.memo(function WheelOfChance({
           </div>
         </div>
       )}
+
+      {/* Wheel of Chance Info Modal */}
+      <AnimatePresence>
+        {isInfoOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-[100] flex items-center justify-center p-4 max-w-md mx-auto">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-3xl p-6 shadow-2xl relative w-full max-h-[85vh] overflow-y-auto"
+            >
+              <button
+                onClick={() => setIsInfoOpen(false)}
+                className="absolute top-4 right-4 p-1 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <div className="flex items-center gap-2.5 mb-4 text-blue-600 dark:text-blue-400">
+                <Info className="w-6 h-6 fill-blue-500/10" />
+                <h2 className="text-lg font-black tracking-tight">ፈጣን የዕድል መንኰራኩር (Wheel of Chance)</h2>
+              </div>
+
+              <div className="text-sm space-y-4 text-gray-700 dark:text-gray-300 leading-relaxed font-medium">
+                <p>ተጫዋቾች እርስ በእርሳቸው በቀጥታ የሚወዳደሩበት (P2P) እና ክፍሉ ሲሞላ ወዲያውኑ የሚሽከረከር ፈጣን ጨዋታ ነው።</p>
+                <p><strong>እንዴት እንደሚጫወት፦</strong> ተጫዋቾች በክፍሉ ውስጥ ካሉት የተወሰኑ የዕድል ቦታዎች (Sectors) ውስጥ የራሳቸውን ቦታ ይመርጣሉ። ሁሉም ቦታዎች በሌሎች ተጫዋቾች ተይዘው ሲያልቁ የሰከንድ ቆጠራው ይጀምርና መንኰራኩሩ ይሽከረከራል።</p>
+
+                <div className="border-t border-gray-100 dark:border-gray-800 pt-3">
+                  <h3 className="font-bold text-gray-900 dark:text-gray-100 mb-1.5">ዋና ዋና ባህሪያት፦</h3>
+                  
+                  <div className="space-y-2 text-xs">
+                    <div>
+                      <h4 className="font-bold text-blue-600 dark:text-blue-400">ሁለት ዓይነት የመጫወቻ ክፍሎች (Rooms)፦</h4>
+                      <ul className="list-disc pl-5 mt-1 space-y-1">
+                        <li><strong>10-ሰው ክፍል፦</strong> 10 የዕድል ቦታዎች አሉት። የአንድ ቦታ መግቢያ ዋጋ 500 ETB ነው።</li>
+                        <li><strong>20-ሰው ክፍል፦</strong> 20 የዕድል ቦታዎች አሉት። የአንድ ቦታ መግቢያ ዋጋ 1,000 ETB ነው።</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border-t border-gray-100 dark:border-gray-800 pt-3">
+                  <h3 className="font-bold text-gray-900 dark:text-gray-100 mb-1.5">የሽልማት ክፍፍል፦</h3>
+                  <ul className="list-disc pl-5 space-y-1 text-xs">
+                    <li><strong>10-ሰው፦</strong> 1ኛ ደረጃ 4,000 ETB፣ 2ኛ ደረጃ 500 ETB ያገኛሉ።</li>
+                    <li><strong>20-ሰው፦</strong> 1ኛ ደረጃ 14,000 ETB፣ 2ኛ ደረጃ 3,000 ETB፣ 3ኛ ደረጃ 1,000 ETB ያገኛሉ።</li>
+                  </ul>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setIsInfoOpen(false)}
+                className="w-full mt-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-all active:scale-95 cursor-pointer shadow-md shadow-blue-500/25"
+              >
+                እሺ ተረዳሁ
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
     </div>
   );

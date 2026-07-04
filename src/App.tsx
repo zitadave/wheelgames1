@@ -4,7 +4,7 @@ import { RoomState, Side } from './types';
 import { Wheel } from './components/Wheel';
 import { JackpotArena } from './components/JackpotArena';
 import { WheelOfChance } from './components/WheelOfChance';
-import { Users, Clock, History, AlertCircle, Coins, Moon, Sun, Settings, X, HelpCircle, Search, Trophy, Gamepad2, TrendingUp, Wallet, User, Plus, ArrowUpRight, ArrowDownLeft, Copy, Check, ChevronRight, Dices, Binary, RefreshCw } from 'lucide-react';
+import { Users, Clock, History, AlertCircle, Coins, Moon, Sun, Settings, X, HelpCircle, Search, Trophy, Gamepad2, TrendingUp, Wallet, User, Plus, ArrowUpRight, ArrowDownLeft, Copy, Check, ChevronRight, Dices, Binary, RefreshCw, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { playWin, playLoss, suspendAudio, resumeAudio } from './utils/sound';
 import { triggerHaptic } from './utils/haptic';
@@ -123,6 +123,7 @@ export default function App() {
   });
 
   const [isPlayersDrawerOpen, setIsPlayersDrawerOpen] = useState<boolean>(false);
+  const [isEvenOddInfoOpen, setIsEvenOddInfoOpen] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   // Bottom Navigation & Mini Pages State
@@ -658,8 +659,16 @@ export default function App() {
             
             {/* TAB 1: Game Arena (Even/Odd) */}
             <div
-              className={`flex-1 flex-col justify-between py-4 ${activeTab === 'even_odd' ? 'flex' : 'hidden'}`}
+              className={`flex-1 flex-col justify-between py-4 relative ${activeTab === 'even_odd' ? 'flex' : 'hidden'}`}
             >
+              {/* Info Icon Button */}
+              <button
+                onClick={() => setIsEvenOddInfoOpen(true)}
+                className="absolute top-0 left-0 z-30 w-6 h-6 rounded-full bg-blue-600 hover:bg-blue-700 text-white transition-all active:scale-95 cursor-pointer flex items-center justify-center shadow-md shadow-blue-500/20"
+                title="የጨዋታ መረጃ"
+              >
+                <span className="font-serif font-black italic text-[13px] leading-none select-none">i</span>
+              </button>
               {/* Wheel Canvas & Quick Arena Label */}
               <div className="relative mx-auto flex flex-col items-center my-auto">
                 <div className="absolute -top-4 -right-4 z-20 text-[10px] font-black uppercase text-blue-500 bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 rounded-full tracking-widest">
@@ -1430,6 +1439,25 @@ export default function App() {
                                       </span>
                                     </div>
                                   </div>
+
+                                  {/* Right-most column: Beautiful, Precise Payout Outcomes */}
+                                  <div className="flex flex-col md:items-end justify-center shrink-0 border-t border-gray-100 dark:border-zinc-800/40 pt-2.5 md:pt-0 md:border-t-0 md:border-l md:border-gray-150 md:dark:border-zinc-800/60 md:pl-5 min-w-[95px]">
+                                    <span className="text-[8.5px] font-black tracking-wider text-gray-400 dark:text-zinc-500 uppercase">
+                                      የክፍያ ሁኔታ • PAYOUT
+                                    </span>
+                                    <div className="flex md:flex-col items-center md:items-end gap-2 md:gap-0.5 mt-0.5">
+                                      <span className={`text-xs font-mono font-black ${
+                                        isWin 
+                                          ? 'text-emerald-500 dark:text-emerald-400' 
+                                          : 'text-zinc-500 dark:text-zinc-400'
+                                      }`}>
+                                        {isWin ? `+${log.totalChange.toLocaleString()}` : '0'} ETB
+                                      </span>
+                                      <span className="text-[9px] font-mono text-gray-400 dark:text-zinc-500 font-bold">
+                                        Bet: {log.bet?.toLocaleString() || '0'} ETB
+                                      </span>
+                                    </div>
+                                  </div>
                                 </div>
                               </div>
                             );
@@ -1581,6 +1609,65 @@ export default function App() {
               </div>
             </motion.div>
           </>
+        )}
+      </AnimatePresence>
+
+      {/* Even/Odd Info Modal */}
+      <AnimatePresence>
+        {isEvenOddInfoOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-[100] flex items-center justify-center p-4 max-w-md mx-auto">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-3xl p-6 shadow-2xl relative w-full max-h-[85vh] overflow-y-auto"
+            >
+              <button
+                onClick={() => setIsEvenOddInfoOpen(false)}
+                className="absolute top-4 right-4 p-1 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <div className="flex items-center gap-2.5 mb-4 text-blue-600 dark:text-blue-400">
+                <Info className="w-6 h-6 fill-blue-500/10" />
+                <h2 className="text-lg font-black tracking-tight">ሞላ/ጎደለ (Even/Odd Wheel)</h2>
+              </div>
+
+              <div className="text-sm space-y-4 text-gray-700 dark:text-gray-300 leading-relaxed font-medium">
+                <p>ይህ በደቂቃ ልዩነት የሚሽከረከር እና ቀላል መሠረታዊ ህግ ያለው የዕድል መንኰራኩር ጨዋታ ነው።</p>
+                <p><strong>እንዴት እንደሚጫወት፦</strong> ተጫዋቾች በመንኰራኩሩ ላይ የሚመጣው አሸናፊ ቁጥር ሞላ (Even) ወይም ጎደል (Odd) ይሆናል በሚለው ላይ የራሳቸውን ውርርድ ያስቀምጣሉ።</p>
+
+                <div className="border-t border-gray-100 dark:border-gray-800 pt-3">
+                  <h3 className="font-bold text-gray-900 dark:text-gray-100 mb-1">የጊዜ ቆጣሪ (Betting Timer):</h3>
+                  <p>ለእያንዳንዱ ዙር ውርርድ ለማስገባት የተወሰነ ሰከንድ ይሰጥዎታል።</p>
+                  <p className="mt-1">ሰዓቱ ወደ ማብቂያው ሲቃረብ (የመጨረሻዎቹ 5 ሰከንዶች ሲቀሩ) ውርርድ በጊዜያዊነት ይዘጋል (Soft Close)። ይህ ተጫዋቾች ሳይደናገጡ የመጨረሻውን ሽክርክሪት እንዲጠባበቁ ይረዳል።</p>
+                </div>
+
+                <div className="border-t border-gray-100 dark:border-gray-800 pt-3">
+                  <h3 className="font-bold text-gray-900 dark:text-gray-100 mb-1.5">ዋና ዋና ባህሪያት፦</h3>
+                  <ul className="list-disc pl-5 space-y-1">
+                    <li><strong>የመንኰራኩሩ ቁጥሮች፦</strong> መንኰራኩሩ ከ 1 እስከ 6 የተከፈለ ሲሆን እኩል ዕድል ያላቸውን ቁጥሮች ይዟል።</li>
+                    <li><strong>ሞላ (Even)፦</strong> መንኰራኩሩ ተሽከርክሮ 2፣ 4፣ ወይም 6 ላይ ሲያርፍ ያሸንፋሉ።</li>
+                    <li><strong>ጎደል (Odd)፦</strong> መንኰራኩሩ ተሽከርክሮ 1፣ 3፣ ወይም 5 ላይ ሲያርፍ ያሸንፋሉ።</li>
+                    <li><strong>የውርርድ ገደብ፦</strong> ዝቅተኛው የመጫወቻ መጠን 200 ETB ነው።</li>
+                  </ul>
+                </div>
+
+                <div className="border-t border-gray-100 dark:border-gray-800 pt-3 bg-blue-50/50 dark:bg-blue-950/20 p-3 rounded-2xl border border-blue-100/50 dark:border-blue-900/30">
+                  <h3 className="font-bold text-blue-700 dark:text-blue-300 mb-0.5">ማሸነፍ (Winning):</h3>
+                  <p className="text-xs text-blue-800 dark:text-blue-200">እሽከርክሪቱ ቆሞ ጠቋሚው ያረፈበት ቁጥር እርስዎ የመረጡት ወገን (ሞላ ወይም ጎደለ) ከሆነ ወዲያውኑ አሸናፊ ይሆናሉ!</p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setIsEvenOddInfoOpen(false)}
+                className="w-full mt-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-all active:scale-95 cursor-pointer shadow-md shadow-blue-500/25"
+              >
+                እሺ ተረዳሁ
+              </button>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
 

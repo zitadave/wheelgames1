@@ -316,14 +316,32 @@ export function initGameEngine(io: Server) {
     "Main-Room": new Room("Main-Room", io),
   };
   
+  const generateWinnersForRoom = (roomName: string, maxSlots: number) => {
+    const slots = Array.from({ length: maxSlots }, (_, i) => i + 1);
+    const picked: number[] = [];
+    while (picked.length < 3 && slots.length > 0) {
+      const idx = Math.floor(Math.random() * slots.length);
+      picked.push(slots.splice(idx, 1)[0]);
+    }
+    return {
+      1: picked[0],
+      2: picked[1],
+      3: picked[2],
+      first: picked[0],
+      second: picked[1],
+      third: picked[2]
+    };
+  };
+
   const gridRooms: Record<string, {
     claimedSlots: { [key: number]: { isSelf: boolean, userId: string, username: string, photoUrl?: string } },
-    roundId: number
+    roundId: number,
+    winners?: any
   }> = {
-    '1-10': { claimedSlots: {}, roundId: 1 },
-    '1-20': { claimedSlots: {}, roundId: 1 },
-    'mini': { claimedSlots: {}, roundId: 1 },
-    'grand': { claimedSlots: {}, roundId: 1 }
+    '1-10': { claimedSlots: {}, roundId: Math.floor(Math.random() * 9000) + 1000 },
+    '1-20': { claimedSlots: {}, roundId: Math.floor(Math.random() * 9000) + 1000 },
+    'mini': { claimedSlots: {}, roundId: Math.floor(Math.random() * 9000) + 1000 },
+    'grand': { claimedSlots: {}, roundId: Math.floor(Math.random() * 9000) + 1000 }
   };
 
   // Setup Realtime Listener for Balance Changes
@@ -535,6 +553,12 @@ export function initGameEngine(io: Server) {
       if (room) {
         if (!room.claimedSlots[data.num]) {
            room.claimedSlots[data.num] = { isSelf: false, userId: data.userId, username: data.username, photoUrl: data.photoUrl };
+           
+           const maxSlots = data.room === '1-10' ? 10 : data.room === '1-20' ? 20 : data.room === 'mini' ? 50 : 100;
+           if (Object.keys(room.claimedSlots).length === maxSlots) {
+             room.winners = generateWinnersForRoom(data.room, maxSlots);
+           }
+
            io.to(data.room).emit("grid_state", room);
            if (callback) callback({ success: true });
         } else {
@@ -547,6 +571,7 @@ export function initGameEngine(io: Server) {
       const room = gridRooms[data.room];
       if (room && room.claimedSlots[data.num]?.userId === data.userId) {
          delete room.claimedSlots[data.num];
+         delete room.winners;
          io.to(data.room).emit("grid_state", room);
          if (callback) callback({ success: true });
       }
@@ -557,6 +582,7 @@ export function initGameEngine(io: Server) {
        if (room) {
           room.claimedSlots = {};
           room.roundId += 1;
+          delete room.winners;
           io.to(roomName).emit("grid_state", room);
        }
     });

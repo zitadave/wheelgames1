@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Trophy, Coins, Lock, Sparkles, RefreshCw, AlertTriangle, Zap, Flame, Crown, Eye, ArrowLeft } from 'lucide-react';
+import { Trophy, Coins, Lock, Sparkles, RefreshCw, AlertTriangle, Zap, Flame, Crown, Eye, ArrowLeft, Info, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { OdometerCanvas } from './OdometerCanvas';
 
@@ -45,6 +45,7 @@ export const JackpotArena = React.memo(function JackpotArena({
   photoUrl
 }: JackpotArenaProps) {
   const [tier, setTier] = useState<JackpotTier>('mini');
+  const [isInfoOpen, setIsInfoOpen] = useState<boolean>(false);
   
   // Matrix configurations
   const config = {
@@ -67,6 +68,8 @@ export const JackpotArena = React.memo(function JackpotArena({
 
   const [freezeCountdown, setFreezeCountdown] = useState<number>(10);
 
+  const serverWinnersRef = useRef<any>(null);
+
   // Realtime syncing
   useEffect(() => {
     if (!socket || !isActive) return;
@@ -75,6 +78,14 @@ export const JackpotArena = React.memo(function JackpotArena({
     
     const onGridState = (state: any) => {
        if (!state) return;
+       
+       if (state.roundId) {
+         setRoundIds(prev => ({
+           ...prev,
+           [tier]: state.roundId
+         }));
+       }
+       
        const newClaimed: any = {};
        Object.keys(state.claimedSlots).forEach((k) => {
          const slot = state.claimedSlots[k as any];
@@ -84,6 +95,12 @@ export const JackpotArena = React.memo(function JackpotArena({
          setMiniGrid(newClaimed);
        } else {
          setGrandGrid(newClaimed);
+       }
+       
+       if (state.winners) {
+         serverWinnersRef.current = state.winners;
+       } else {
+         serverWinnersRef.current = null;
        }
        
        if (Object.keys(newClaimed).length === config[tier].slots && gamePhase === 'lobby') {
@@ -248,6 +265,9 @@ export const JackpotArena = React.memo(function JackpotArena({
           setGrandGrid(state.grid);
         }
         setTier(state.tier);
+        if (state.serverWinners) {
+          serverWinnersRef.current = state.serverWinners;
+        }
 
         // Safely recover active draw phase on mount
         if (state.gamePhase !== 'lobby') {
@@ -280,7 +300,8 @@ export const JackpotArena = React.memo(function JackpotArena({
       winners,
       vaporizedSlots,
       grid: activeGrid,
-      tier
+      tier,
+      serverWinners: serverWinnersRef.current
     }));
   }, [gamePhase, drawNumber, winners, vaporizedSlots, activeGrid, tier]);
 
@@ -342,7 +363,13 @@ export const JackpotArena = React.memo(function JackpotArena({
       availableSpots.push(Math.floor(Math.random() * currentConfig.slots) + 1);
     }
 
-    const matchedWinner = availableSpots[Math.floor(Math.random() * availableSpots.length)];
+    const mappedKey = drawIndex === 1 ? 'first' : drawIndex === 2 ? 'second' : 'third';
+    let matchedWinner: number;
+    if (serverWinnersRef.current && serverWinnersRef.current[mappedKey]) {
+      matchedWinner = serverWinnersRef.current[mappedKey];
+    } else {
+      matchedWinner = availableSpots[Math.floor(Math.random() * availableSpots.length)];
+    }
     setCurrentWinner(matchedWinner);
 
     // Neon Lightning Blitz for mini, for grand we just start odometer immediately
@@ -811,12 +838,33 @@ export const JackpotArena = React.memo(function JackpotArena({
         
         {/* Progress indicator bar (hidden during active drawing) */}
         {!showTheater && (
-          <div className="flex justify-between items-center mb-2 px-1">
-            <span className="text-sm font-black uppercase text-blue-600 dark:text-blue-400 tracking-wider">
-              {Object.keys(activeGrid).length}/{currentConfig.slots} Claimed
-            </span>
-            <div className="text-[10px] font-black uppercase text-blue-500 bg-blue-500/10 border border-blue-500/20 px-2.5 py-0.5 rounded-full tracking-widest">
-              Round #{currentRoundId}
+          <div className="mb-4">
+            <div className="flex justify-between items-center mb-2 px-1 gap-1.5">
+              <span className="text-sm font-black uppercase text-blue-600 dark:text-blue-400 tracking-wider flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse inline-block shadow-sm" />
+                {Object.keys(activeGrid).length}/{currentConfig.slots} Claimed
+              </span>
+              <div className="flex items-center gap-1.5">
+                <div className="text-[10px] font-black uppercase text-blue-500 bg-blue-500/10 border border-blue-500/20 px-2.5 py-0.5 rounded-full tracking-widest font-mono">
+                  Round #{currentRoundId}
+                </div>
+                <button
+                  onClick={() => setIsInfoOpen(true)}
+                  className="w-5 h-5 rounded-full bg-blue-600 hover:bg-blue-700 text-white transition-all active:scale-95 cursor-pointer flex items-center justify-center shadow-md shadow-blue-500/20"
+                  title="የጨዋታ መረጃ"
+                >
+                  <span className="font-serif font-black italic text-xs leading-none select-none">i</span>
+                </button>
+              </div>
+            </div>
+            {/* Visual real-time indicator bar */}
+            <div className="w-full h-1.5 bg-gray-150 dark:bg-zinc-800 rounded-full overflow-hidden shadow-inner">
+              <motion.div 
+                className="h-full bg-blue-600 rounded-full"
+                initial={{ width: 0 }}
+                animate={{ width: `${(Object.keys(activeGrid).length / currentConfig.slots) * 100}%` }}
+                transition={{ duration: 0.3 }}
+              />
             </div>
           </div>
         )}
@@ -977,6 +1025,70 @@ export const JackpotArena = React.memo(function JackpotArena({
                 </motion.div>
               );
             })()}
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Jackpot Arena Info Modal */}
+      <AnimatePresence>
+        {isInfoOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-[100] flex items-center justify-center p-4 max-w-md mx-auto">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-3xl p-6 shadow-2xl relative w-full max-h-[85vh] overflow-y-auto"
+            >
+              <button
+                onClick={() => setIsInfoOpen(false)}
+                className="absolute top-4 right-4 p-1 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <div className="flex items-center gap-2.5 mb-4 text-blue-600 dark:text-blue-400">
+                <Info className="w-6 h-6 fill-blue-500/10" />
+                <h2 className="text-lg font-black tracking-tight">ዕድል (Jackpot Arena)</h2>
+              </div>
+
+              <div className="text-sm space-y-4 text-gray-700 dark:text-gray-300 leading-relaxed font-medium">
+                <p>ተጫዋቾች በጋራ የቁጥር ሰሌዳ (Grid) ላይ ያሉ ቦታዎችን በመግዛት ከፍተኛ የገንዘብ ሽልማት (Jackpot Pool) ለማሸነፍ የሚወዳደሩበት ትልቅ ጨዋታ ነው።</p>
+                <p><strong>እንዴት እንደሚጫወት፦</strong> ተጫዋቾች ከቀረቡት የቁጥር ሳጥኖች (Slots) ውስጥ የፈለጉትን የቁጥር ቦታዎች በመግዛት ዕጣቸውን ይጠብቃሉ። ሁሉም ቦታዎች ሲያልቁ ወይም ሰዓቱ ሲጠናቀቅ ዕጣው ይወጣል።</p>
+
+                <div className="border-t border-gray-100 dark:border-gray-800 pt-3">
+                  <h3 className="font-bold text-gray-900 dark:text-gray-100 mb-1.5">ዋና ዋና ባህሪያት፦</h3>
+                  
+                  <div className="space-y-2 text-xs">
+                    <div>
+                      <h4 className="font-bold text-blue-600 dark:text-blue-400">ሁለት የጃክፖት ደረጃዎች፦</h4>
+                      <ul className="list-disc pl-5 mt-1 space-y-1">
+                        <li><strong>Mini Jackpot፦</strong> 50 የቁጥር ቦታዎች (Slots) አሉት። የመግቢያ ዋጋ 2,000 ETB ነው።</li>
+                        <li><strong>Grand Jackpot፦</strong> 100 የቁጥር ቦታዎች (Slots) አሉት። የመግቢያ ዋጋ 2,000 ETB ነው።</li>
+                      </ul>
+                    </div>
+
+                    <div className="mt-2">
+                      <strong>የአሸናፊዎች አወጣጥ፦</strong> ሰሌዳው ሙሉ በሙሉ ሲሞላ፣ ከፍተኛ ጥራት ባለውና በሚሽከረከር የኦዶሜትር (Odometer) የዕጣ ማውጫ አማካኝነት ለ 1ኛ፣ 2ኛ እና 3ኛ ደረጃ አሸናፊዎች ዕጣ ይወጣል።
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border-t border-gray-100 dark:border-gray-800 pt-3">
+                  <h3 className="font-bold text-gray-900 dark:text-gray-100 mb-1.5">የሽልማት ክፍፍል፦</h3>
+                  <ul className="list-disc pl-5 space-y-1 text-xs">
+                    <li><strong>Mini Jackpot፦</strong> 1ኛ ደረጃ 72,000 ETB፣ 2ኛ ደረጃ 12,600 ETB፣ 3ኛ ደረጃ 5,400 ETB ያገኛሉ።</li>
+                    <li><strong>Grand Jackpot፦</strong> 1ኛ ደረጃ 144,000 ETB፣ 2ኛ ደረጃ 25,200 ETB፣ 3ኛ ደረጃ 10,800 ETB ያገኛሉ።</li>
+                  </ul>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setIsInfoOpen(false)}
+                className="w-full mt-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-all active:scale-95 cursor-pointer shadow-md shadow-blue-500/25"
+              >
+                እሺ ተረዳሁ
+              </button>
+            </motion.div>
           </div>
         )}
       </AnimatePresence>

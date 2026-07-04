@@ -14,6 +14,7 @@ interface WheelOfChanceProps {
   userId?: string;
   username?: string;
   photoUrl?: string | null;
+  showNotification?: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
 
 type GamePhase = 'lobby' | 'countdown' | 'spinning' | 'announcing' | 'complete';
@@ -34,7 +35,8 @@ export const WheelOfChance = React.memo(function WheelOfChance({
   socket,
   userId,
   username = 'Player',
-  photoUrl
+  photoUrl,
+  showNotification
 }: WheelOfChanceProps) {
   // Local sound state
   const [soundEnabled, setSoundEnabled] = useState(parentSoundTicks);
@@ -285,7 +287,11 @@ export const WheelOfChance = React.memo(function WheelOfChance({
     }
 
     if (balance < entryFee) {
-      setStatusFilament('• ❌ Insufficient balance for this room!');
+      if (showNotification) {
+        showNotification('Insufficient balance to claim this slot!', 'error');
+      } else {
+        setStatusFilament('• ❌ Insufficient balance for this room!');
+      }
       playBeep(220, 0.25, 'sawtooth');
       return;
     }
@@ -899,7 +905,7 @@ export const WheelOfChance = React.memo(function WheelOfChance({
                       onClick={() => handleClaimSlot(num)}
                       whileHover={{ scale: 1.03 }}
                       whileTap={{ scale: 0.95 }}
-                      className="aspect-square rounded-xl bg-gray-100 dark:bg-white/5 hover:bg-gray-200 dark:hover:bg-white/10 border border-gray-200 dark:border-white/5 hover:border-blue-500 flex flex-col items-center justify-center text-gray-900 dark:text-white transition-all cursor-pointer"
+                      className="aspect-square rounded-xl bg-gray-100 dark:bg-white/5 hover:bg-gray-200 dark:hover:bg-white/10 border border-gray-200 dark:border-white/5 hover:border-blue-500 text-gray-900 dark:text-white flex flex-col items-center justify-center transition-all cursor-pointer"
                     >
                       <span className="text-sm font-mono font-black">{num}</span>
                       <span className="text-[8px] font-black text-blue-400 mt-0.5 uppercase tracking-tighter">CLAIM</span>

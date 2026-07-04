@@ -6,7 +6,6 @@ import { JackpotArena } from './components/JackpotArena';
 import { WheelOfChance } from './components/WheelOfChance';
 import { Users, Clock, History, AlertCircle, Coins, Moon, Sun, Settings, X, HelpCircle, Search, Trophy, Gamepad2, TrendingUp, Wallet, User, Plus, ArrowUpRight, ArrowDownLeft, Copy, Check, ChevronRight, Dices, Binary, RefreshCw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import confetti from 'canvas-confetti';
 import { playWin, playLoss, suspendAudio, resumeAudio } from './utils/sound';
 import { triggerHaptic } from './utils/haptic';
 
@@ -105,7 +104,7 @@ export default function App() {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, []);
 
-  const [betAmount, setBetAmount] = useState<number>(200);
+  const [betAmount, setBetAmount] = useState<number | null>(null);
   const [partialBet, setPartialBet] = useState<boolean>(true);
   const [showResult, setShowResult] = useState<boolean>(false);
   const [lastWinner, setLastWinner] = useState<number | null>(null);
@@ -342,19 +341,6 @@ export default function App() {
           if (isActive) {
             setShowResult(true);
             triggerHaptic('notification', 'success');
-            let fireConfetti = confetti as any;
-            if (typeof confetti === 'function') {
-              fireConfetti = confetti;
-            } else if (confetti && typeof (confetti as any).default === 'function') {
-              fireConfetti = (confetti as any).default;
-            }
-            
-            if (fireConfetti && typeof fireConfetti.create === 'function') {
-              const customConfetti = fireConfetti.create(null, { resize: true, useWorker: false });
-              customConfetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
-            } else {
-              fireConfetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
-            }
           }
           setLastWinner(state.winner);
           
@@ -461,6 +447,10 @@ export default function App() {
 
   const handlePlaceBet = (side: Side, retryAmount?: number) => {
     const targetAmount = retryAmount !== undefined ? retryAmount : betAmount;
+    if (targetAmount === null || targetAmount === 0) {
+      showNotification("Please select or enter a bet amount!", "error");
+      return;
+    }
     if (!socket) {
       showNotification("Not connected to server. Retrying connection...", "error");
       setFailedBet({ side, amount: targetAmount });
@@ -698,7 +688,7 @@ export default function App() {
                 <div className="px-4 space-y-4 mt-auto">
                   {/* Shortcut Amounts Grid */}
                   <div className="flex gap-2 justify-center">
-                    {[200, 1000, 2000, 5000].map(amt => (
+                    {[200, 1000, 2000, 5000, 10000, 20000].map(amt => (
                       <button
                         key={amt}
                         onClick={() => setBetAmount(amt)}
@@ -725,9 +715,12 @@ export default function App() {
                         value={betAmount || ''}
                         onFocus={() => setIsInputFocused(true)}
                         onBlur={() => setIsInputFocused(false)}
-                        onChange={(e) => setBetAmount(Math.max(0, parseInt(e.target.value) || 0))}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setBetAmount(val === '' ? null : Math.max(0, parseInt(val) || 0));
+                        }}
                         className="bg-transparent text-gray-800 dark:text-gray-200 px-3 py-1.5 text-center font-bold text-sm outline-none w-full transition-colors placeholder:text-gray-400 dark:placeholder:text-gray-600 z-10"
-                        placeholder="Custom Amount"
+                        placeholder="min bet 200"
                       />
                     </div>
 
@@ -882,6 +875,7 @@ export default function App() {
                   userId={userId}
                   username={username}
                   photoUrl={photoUrl}
+                  showNotification={showNotification}
                 />
             </div>
 

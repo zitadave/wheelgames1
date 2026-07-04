@@ -641,6 +641,10 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       const currentBalance = user ? Number(user.balance) : 0;
       logBot(`userId=${userId} current balance is ${currentBalance}`);
 
+      if (currentBalance < 100) {
+        return bot.sendMessage(chatId, `❌ *ያለዎት ቀሪ ሂሳብ በቂ አይደለም!* ለመውጣት ቢያንስ 100 ብር ያስፈልጋል።\n\n💳 *የእርስዎ ባላንስ:* ${currentBalance.toLocaleString()} ETB\n_(Minimum withdrawal is 100 ETB)_`, { parse_mode: "Markdown" });
+      }
+
       userStates.set(userId, { step: 'withdraw_amount' });
       const rawMsg = promptsConfig.withdraw_start_msg;
       const msgText = rawMsg.replace(/{balance}/g, currentBalance.toLocaleString());
@@ -2188,8 +2192,8 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
         return bot.sendMessage(chatId, "❌ *እባክዎን ትክክለኛ የብር መጠን በቁጥር ብቻ ያስገቡ:*");
       }
 
-      const MIN_WITHDRAW = 50;
-      const MAX_WITHDRAW = 50000;
+      const MIN_WITHDRAW = 100;
+      const MAX_WITHDRAW = 150000;
 
       // Min limit check
       if (amount < MIN_WITHDRAW) {
@@ -2240,7 +2244,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
 
     // 4. WITHDRAWAL: ACCOUNT / PHONE ENTRY
     if (state.step === 'withdraw_account') {
-      const amount = state.amount || 50;
+      const amount = state.amount || 100;
       const bank = state.bank || "Telebirr";
       const username = msg.from?.username || "no_username";
       const fullName = `${msg.from?.first_name || ""} ${msg.from?.last_name || ""}`.trim() || "Player";

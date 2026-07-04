@@ -40,7 +40,7 @@ export default function App() {
   const [firstName] = useState(() => tgUser?.first_name || '');
   const [lastName] = useState(() => tgUser?.last_name || '');
 
-  const [balance, setBalance] = useState(100000); // 100k start
+  const [balance, setBalance] = useState(0); // 0 start
   const [currentRoom, setCurrentRoom] = useState<string>('Main-Room');
   const [roomsStatus, setRoomsStatus] = useState<Record<string, { status: string, even: number, odd: number }>>({});
   const [roomState, setRoomState] = useState<RoomState | null>(() => {
@@ -52,9 +52,9 @@ export default function App() {
   const [failedBet, setFailedBet] = useState<{ side: Side; amount: number } | null>(null);
   const [isPlacingBet, setIsPlacingBet] = useState<boolean>(false);
 
-  const showNotification = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+  const showNotification = React.useCallback((message: string, type: 'success' | 'error' | 'info' = 'info') => {
     setNotification({ message, type });
-  };
+  }, []);
 
   const handleTriggerFlow = async (type: 'deposit' | 'withdraw') => {
     const tgUsername = botUsername || 'YOUR_BOT_USERNAME';
@@ -439,7 +439,11 @@ export default function App() {
     });
 
     socket.on('refund', (amount: number) => {
-      setBalance(b => b + amount);
+      setBalance(b => {
+        const newBalance = b + amount;
+        socket.emit('logTransaction', { userId, amount: amount, type: 'refund', description: 'Partial Bet Refund', newBalance });
+        return newBalance;
+      });
     });
 
     return () => {
@@ -448,12 +452,12 @@ export default function App() {
     };
   }, [socket, showResult, lastWinner, userId]);
 
-  const handleJoinRoom = (roomId: string) => {
+  const handleJoinRoom = React.useCallback((roomId: string) => {
     if (socket) {
       socket.emit('joinRoom', roomId);
       setCurrentRoom(roomId);
     }
-  };
+  }, [socket]);
 
   const handlePlaceBet = (side: Side, retryAmount?: number) => {
     const targetAmount = retryAmount !== undefined ? retryAmount : betAmount;
@@ -859,6 +863,8 @@ export default function App() {
                   onTheaterModeChange={setIsJackpotTheaterMode}
                   socket={socket}
                   userId={userId}
+                  username={username}
+                  photoUrl={photoUrl}
                 />
             </div>
 
@@ -874,6 +880,8 @@ export default function App() {
                   isActive={activeTab === 'chance'}
                   socket={socket}
                   userId={userId}
+                  username={username}
+                  photoUrl={photoUrl}
                 />
             </div>
 

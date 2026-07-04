@@ -14,7 +14,7 @@ interface JackpotArenaProps {
   isActive?: boolean;
   onTheaterModeChange?: (active: boolean) => void;
   socket?: any;
-  userId?: string;
+  userId?: string; username?: string; photoUrl?: string | null;
 }
 
 type JackpotTier = 'mini' | 'grand';
@@ -26,10 +26,10 @@ interface JackpotHistoryItem {
 
 interface Participant {
   username: string;
-  isSelf: boolean;
+  isSelf: boolean; photoUrl?: string | null;
 }
 
-export function JackpotArena({
+export const JackpotArena = React.memo(function JackpotArena({
   balance,
   setBalance,
   showNotification,
@@ -40,7 +40,9 @@ export function JackpotArena({
   isActive = true,
   onTheaterModeChange,
   socket,
-  userId
+  userId,
+  username = "Player",
+  photoUrl
 }: JackpotArenaProps) {
   const [tier, setTier] = useState<JackpotTier>('mini');
   
@@ -62,6 +64,40 @@ export function JackpotArena({
   
   // Track currently drawn winners for the 3 slots (1st, 2nd, 3rd)
   const [drawNumber, setDrawNumber] = useState<1 | 2 | 3>(1);
+
+  const [freezeCountdown, setFreezeCountdown] = useState<number>(10);
+
+  // Realtime syncing
+  useEffect(() => {
+    if (!socket || !isActive) return;
+    
+    socket.emit('grid_join', tier);
+    
+    const onGridState = (state: any) => {
+       if (!state) return;
+       const newClaimed: any = {};
+       Object.keys(state.claimedSlots).forEach((k) => {
+         const slot = state.claimedSlots[k as any];
+         newClaimed[Number(k)] = { ...slot, isSelf: slot.userId === userId };
+       });
+       if (tier === 'mini') {
+         setMiniGrid(newClaimed);
+       } else {
+         setGrandGrid(newClaimed);
+       }
+       
+       if (Object.keys(newClaimed).length === config[tier].slots && gamePhase === 'lobby') {
+          setGamePhase('freeze');
+          setFreezeCountdown(10);
+       }
+    };
+    
+    socket.on('grid_state', onGridState);
+    return () => {
+       socket.emit('grid_leave', tier);
+       socket.off('grid_state', onGridState);
+    };
+  }, [socket, tier, isActive, gamePhase]);
   const [winners, setWinners] = useState<{ first?: number; second?: number; third?: number }>({});
   const [vaporizedSlots, setVaporizedSlots] = useState<number[]>([]);
 
@@ -78,7 +114,7 @@ export function JackpotArena({
   const currentHistory = history[tier];
 
   // Animation States
-  const [freezeCountdown, setFreezeCountdown] = useState<number>(10);
+  
   
   // Neon Blitz dynamic active index
   const [blitzActiveTile, setBlitzActiveTile] = useState<number | null>(null);
@@ -251,7 +287,9 @@ export function JackpotArena({
   const resetLobby = () => {
     sessionStorage.removeItem('odometerStartTime');
     sessionStorage.removeItem('jackpotArenaState');
-    setTargetGrid({});
+    
+    socket?.emit('grid_nextRound', tier);
+    
     setGamePhase('lobby');
     setDrawNumber(1);
     setWinners({});
@@ -529,21 +567,20 @@ export function JackpotArena({
       showNotification('Grid coordinates are currently locked for drawing!', 'error');
       return;
     }
-
+    
     if (activeGrid[num]) {
       if (activeGrid[num].isSelf) {
         // Unclaim
-        setBalance(prev => {
-          const newBalance = prev + currentConfig.entry;
-          socket?.emit('logTransaction', { userId, amount: currentConfig.entry, type: 'refund', description: `Refund Spot #${num}`, newBalance });
-          return newBalance;
+        socket?.emit('grid_releaseSlot', { room: tier, num, userId }, (res: any) => {
+           if (res?.success) {
+              setBalance(prev => {
+                const newBalance = prev + currentConfig.entry;
+                socket?.emit('logTransaction', { userId, amount: currentConfig.entry, type: 'refund', description: `Refund Spot #${num}`, newBalance });
+                return newBalance;
+              });
+              showNotification(`Unsecured Grid Position #${num}!`, 'success');
+           }
         });
-        setTargetGrid(prev => {
-          const next = { ...prev };
-          delete next[num];
-          return next;
-        });
-        showNotification(`Unsecured Grid Position #${num}!`, 'success');
       } else {
         showNotification('This position is already allocated!', 'error');
       }
@@ -551,29 +588,26 @@ export function JackpotArena({
     }
 
     if (balance < currentConfig.entry) {
-      showNotification('Insufficient balance to claim this 2,000 ETB slot!', 'error');
+      showNotification('Insufficient balance to claim this slot!', 'error');
       return;
     }
 
-    setBalance(prev => {
-      const newBalance = prev - currentConfig.entry;
-      socket?.emit('logTransaction', { userId, amount: -currentConfig.entry, type: 'bet', description: `Secured Spot #${num} in Jackpot`, newBalance });
-      return newBalance;
+    socket?.emit('grid_claimSlot', { room: tier, num, userId, username, photoUrl }, (res: any) => {
+       if (res?.success) {
+          setBalance(prev => {
+            const newBalance = prev - currentConfig.entry;
+            socket?.emit('logTransaction', { userId, amount: -currentConfig.entry, type: 'bet', description: `Secured Spot #${num} in Jackpot`, newBalance });
+            return newBalance;
+          });
+          setTransactions(prev => [
+            { id: Date.now(), type: 'bet', desc: `Secured Spot #${num} in Jackpot`, amount: -currentConfig.entry, date: 'Just now', positive: false },
+            ...prev
+          ]);
+          showNotification(`Secured Grid Position #${num}! Good Luck!`, 'success');
+       } else {
+          showNotification(`Failed to secure: ${res?.message || 'Slot taken'}`, 'error');
+       }
     });
-    setTransactions(prev => [
-      { id: Date.now(), type: 'bet', desc: `Secured Spot #${num} in Jackpot`, amount: -currentConfig.entry, date: 'Just now', positive: false },
-      ...prev
-    ]);
-
-    setTargetGrid(prev => ({
-      ...prev,
-      [num]: {
-        username: 'You',
-        isSelf: true
-      }
-    }));
-
-    showNotification(`Secured Grid Position #${num}! Good Luck!`, 'success');
   };
 
   const [userHiddenTheater, setUserHiddenTheater] = useState(false);
@@ -832,7 +866,7 @@ export function JackpotArena({
                   key={num}
                   onClick={() => handleClaimSlot(num)}
                   whileTap={{ scale: 0.95 }}
-                  className={`aspect-square rounded-lg border flex flex-col items-center justify-center p-0.5 cursor-pointer transition-all relative ${
+                  className={`aspect-square rounded-lg border flex flex-col items-center justify-center p-0.5 cursor-pointer transition-all relative overflow-hidden ${
                     isWinner 
                       ? 'bg-gradient-to-b from-green-500 to-green-600 border-green-400 text-white shadow-lg scale-105 z-10'
                       : isBlitzActive
@@ -843,9 +877,19 @@ export function JackpotArena({
                   }`}
                   style={isBlitzActive ? { opacity: 1 } : undefined}
                 >
-                  <span className="text-[10px] font-black font-mono leading-none">{num}</span>
-                  <div className="flex items-center gap-0.5 text-[6px] font-semibold tracking-tighter mt-0.5 truncate max-w-full leading-none">
-                    <Lock className="w-1.5 h-1.5 shrink-0" />
+                  {item.photoUrl && !isBlitzActive && !isWinner ? (
+                     <div className="absolute inset-0 opacity-20 pointer-events-none">
+                       <img src={item.photoUrl} alt="Avatar" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                     </div>
+                  ) : null}
+                  
+                  <span className="text-[10px] font-black font-mono leading-none z-10">{num}</span>
+                  <div className="flex items-center gap-0.5 text-[6px] font-semibold tracking-tighter mt-0.5 truncate max-w-full leading-none z-10">
+                    {item.photoUrl ? (
+                      <img src={item.photoUrl} alt="Avatar" className="w-2 h-2 rounded-full object-cover shrink-0" referrerPolicy="no-referrer" />
+                    ) : (
+                      <Lock className="w-1.5 h-1.5 shrink-0" />
+                    )}
                     <span className="truncate max-w-[24px]">{item.isSelf ? 'You' : item.username}</span>
                   </div>
                 </motion.div>
@@ -951,4 +995,4 @@ export function JackpotArena({
 
     </div>
   );
-}
+});

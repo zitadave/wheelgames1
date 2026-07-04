@@ -3,18 +3,10 @@ import { supabase } from "./supabase.js";
 
 export type Side = "even" | "odd";
 
-export interface PlayerInfo {
-  userId: string;
-  username: string;
-  photoUrl: string;
-}
-
 export interface PlayerBet {
   userId: string;
   username: string;
-  photoUrl: string;
   amount: number;
-  number?: number; // Optional: 1-6
   side: Side;
   partial: boolean;
 }
@@ -25,7 +17,6 @@ export interface RoomState {
   status: "betting" | "balancing" | "spinning" | "result";
   timeLeft: number;
   players: Record<string, PlayerBet>;
-  numbersTaken: Record<number, PlayerInfo>; // Track who took which number
   pools: { even: number; odd: number };
   feed: string[];
   capacity: { even: number; odd: number };
@@ -56,7 +47,6 @@ class Room {
       pools: { even: 0, odd: 0 },
       feed: [],
       capacity: { even: 0, odd: 0 },
-      numbersTaken: {},
       onlineCount: 15,
     };
     this.initRoundCounterAndStart();
@@ -97,7 +87,6 @@ class Room {
     this.state.pools = { even: 0, odd: 0 };
     this.state.feed = [];
     this.state.capacity = { even: 0, odd: 0 };
-    this.state.numbersTaken = {};
     this.state.winner = undefined;
 
     this.updateOnlineCount();
@@ -117,12 +106,12 @@ class Room {
     }
   }
 
-  private async transitionState() {
+  private transitionState() {
     if (this.timer) clearInterval(this.timer);
 
     switch (this.state.status) {
       case "betting":
-        await this.doBalancing();
+        this.doBalancing();
         break;
       case "balancing":
         this.startSpinning();
@@ -136,7 +125,7 @@ class Room {
     }
   }
 
-  private async doBalancing() {
+  private doBalancing() {
     this.state.status = "balancing";
     this.state.timeLeft = BALANCING_TIME;
 
@@ -171,50 +160,14 @@ class Room {
               p.amount = remaining;
               currentOverPool += remaining;
               this.state.feed.unshift(`${p.username}'s bet downscaled to match pool.`);
-              
-              // Log refund to Supabase
-              try {
-                if (supabase) {
-                   const { data: userData } = await supabase.from("users").select("balance").eq("id", p.userId).single();
-                   if (userData) {
-                      const newBalance = Number(userData.balance) + refund;
-                      await supabase.from("users").update({ balance: newBalance }).eq("id", p.userId);
-                      await supabase.from("transactions").insert({
-                        user_id: p.userId,
-                        amount: refund,
-                        type: 'refund',
-                        description: 'Even/Odd Pool Limit Refund'
-                      });
-                      this.io.to(p.userId).emit('balanceUpdated', { userId: p.userId, balance: newBalance });
-                   }
-                }
-              } catch (e) { console.error("Refund logging error:", e); }
-
+              // Need a way to notify client to refund their local balance,
+              // for this prototype, we'll emit a specific event or they get balance updated at end.
               this.io.to(p.userId).emit('refund', refund);
             } else {
               // Reject the whole bet
               const refund = p.amount;
               p.amount = 0; // effectively removed
               this.state.feed.unshift(`${p.username}'s bet skipped (pool limit).`);
-              
-              // Log refund to Supabase
-              try {
-                if (supabase) {
-                   const { data: userData } = await supabase.from("users").select("balance").eq("id", p.userId).single();
-                   if (userData) {
-                      const newBalance = Number(userData.balance) + refund;
-                      await supabase.from("users").update({ balance: newBalance }).eq("id", p.userId);
-                      await supabase.from("transactions").insert({
-                        user_id: p.userId,
-                        amount: refund,
-                        type: 'refund',
-                        description: 'Even/Odd Pool Limit Refund'
-                      });
-                      this.io.to(p.userId).emit('balanceUpdated', { userId: p.userId, balance: newBalance });
-                   }
-                }
-              } catch (e) { console.error("Refund logging error:", e); }
-              
               this.io.to(p.userId).emit('refund', refund);
             }
           }
@@ -306,15 +259,9 @@ class Room {
     this.io.to(this.state.id).emit("roomState", this.state);
   }
 
-  public placeBet(userId: string, username: string, photoUrl: string, amount: number, side: Side, number: number | undefined, partial: boolean) {
+  public placeBet(userId: string, username: string, amount: number, side: Side, partial: boolean) {
     if (this.state.status !== "betting" || this.state.timeLeft < 5) {
       return { success: false, message: "Betting is closed for this round." };
-    }
-
-    if (number !== undefined && number >= 1 && number <= 6) {
-        if (this.state.numbersTaken[number]) {
-          return { success: false, message: "This number is already taken." };
-        }
     }
 
     const existingBet = this.state.players[userId];
@@ -322,10 +269,13 @@ class Room {
     if (existingBet) {
       const oldAmount = existingBet.amount;
       const oldSide = existingBet.side;
-      const oldNumber = existingBet.number;
       
-      if (oldNumber !== undefined) {
-         this.state.numbersTaken[oldNumber] = { userId: "", username: "", photoUrl: "" }; // Free old number
+      if (oldSide !== side) {
+         if (this.state.capacity[side] >= MAX_CAPACITY) {
+           return { success: false, message: "Room capacity reached for this side." };
+         }
+         this.state.capacity[oldSide] -= 1;
+         this.state.capacity[side] += 1;
       }
       
       this.state.pools[oldSide] -= oldAmount;
@@ -333,35 +283,27 @@ class Room {
       
       existingBet.amount = amount;
       existingBet.side = side;
-      existingBet.number = number;
-      existingBet.photoUrl = photoUrl;
       existingBet.partial = partial;
       
-      if (number !== undefined) {
-        this.state.numbersTaken[number] = { userId, username, photoUrl };
-      }
-      
       const sideName = side === 'even' ? 'ሞላ (Even)' : 'ጎደል (Odd)';
-      const numberStr = number !== undefined ? ` (${number})` : '';
-      this.state.feed.unshift(`${username} updated bet to ${amount.toLocaleString()} on ${sideName}${numberStr}!`);
+      this.state.feed.unshift(`${username} updated bet to ${amount.toLocaleString()} on ${sideName}!`);
     } else {
-      this.state.players[userId] = { userId, username, photoUrl, amount, number, side, partial };
+      if (this.state.capacity[side] >= MAX_CAPACITY) {
+        return { success: false, message: "Room capacity reached for this side." };
+      }
+      this.state.players[userId] = { userId, username, amount, side, partial };
+      this.state.capacity[side] += 1;
       this.state.pools[side] += amount;
       
-      if (number !== undefined) {
-        this.state.numbersTaken[number] = { userId, username, photoUrl };
-      }
-      
       const sideName = side === 'even' ? 'ሞላ (Even)' : 'ጎደል (Odd)';
-      const numberStr = number !== undefined ? ` (${number})` : '';
-      this.state.feed.unshift(`${username} placed ${amount.toLocaleString()} on ${sideName}${numberStr}!`);
+      this.state.feed.unshift(`${username} placed ${amount.toLocaleString()} on ${sideName}!`);
     }
 
     if (this.state.feed.length > 10) this.state.feed.pop();
     this.broadcastState();
 
     // Instant lock if both sides full
-    if (Object.keys(this.state.numbersTaken).length >= 6) {
+    if (this.state.capacity.even >= MAX_CAPACITY && this.state.capacity.odd >= MAX_CAPACITY) {
        this.transitionState(); // Move to balancing instantly
     }
 
@@ -372,6 +314,16 @@ class Room {
 export function initGameEngine(io: Server) {
   const rooms = {
     "Main-Room": new Room("Main-Room", io),
+  };
+  
+  const gridRooms: Record<string, {
+    claimedSlots: { [key: number]: { isSelf: boolean, userId: string, username: string, photoUrl?: string } },
+    roundId: number
+  }> = {
+    '1-10': { claimedSlots: {}, roundId: 1 },
+    '1-20': { claimedSlots: {}, roundId: 1 },
+    'mini': { claimedSlots: {}, roundId: 1 },
+    'grand': { claimedSlots: {}, roundId: 1 }
   };
 
   // Setup Realtime Listener for Balance Changes
@@ -399,21 +351,46 @@ export function initGameEngine(io: Server) {
         const { supabase } = await import("./supabase.js");
         if (!supabase) return;
         
-        // Upsert user with Telegram info
-        const { data, error } = await supabase
+        // Fetch user first to see if they exist
+        let { data: user, error: fetchError } = await supabase
           .from("users")
-          .upsert({ 
-            id: userId, 
-            username,
-            ...(photoUrl ? { photo_url: photoUrl } : {}),
-            ...(firstName ? { first_name: firstName } : {}),
-            ...(lastName ? { last_name: lastName } : {})
-          }, { onConflict: 'id' })
-          .select()
+          .select("*")
+          .eq("id", userId)
           .single();
+
+        if (!user) {
+          // New player - insert with balance 0
+          const { data: newUser, error: insertError } = await supabase
+            .from("users")
+            .insert({
+              id: userId,
+              username,
+              balance: 0,
+              ...(photoUrl ? { photo_url: photoUrl } : {}),
+              ...(firstName ? { first_name: firstName } : {}),
+              ...(lastName ? { last_name: lastName } : {})
+            })
+            .select()
+            .single();
+          if (newUser) user = newUser;
+        } else {
+          // Update existing user info
+          const { data: updatedUser } = await supabase
+            .from("users")
+            .update({
+              username,
+              ...(photoUrl ? { photo_url: photoUrl } : {}),
+              ...(firstName ? { first_name: firstName } : {}),
+              ...(lastName ? { last_name: lastName } : {})
+            })
+            .eq("id", userId)
+            .select()
+            .single();
+          if (updatedUser) user = updatedUser;
+        }
           
-        if (!error && data) {
-           socket.emit("syncBalance", data.balance);
+        if (user) {
+           socket.emit("syncBalance", user.balance);
         }
       } catch (e) {
         console.error("Sync user error:", e);
@@ -547,10 +524,47 @@ export function initGameEngine(io: Server) {
       socket.emit("roomsStatus", status);
     });
 
-    socket.on("placeBet", (data: { roomId: string, userId: string, username: string, photoUrl: string, amount: number, side: Side, number: number | undefined, partial: boolean }, callback) => {
+    socket.on("grid_join", (roomName: string) => {
+      socket.join(roomName);
+      if (!gridRooms[roomName]) gridRooms[roomName] = { claimedSlots: {}, roundId: 1 };
+      socket.emit("grid_state", gridRooms[roomName]);
+    });
+
+    socket.on("grid_claimSlot", (data: { room: string, num: number, userId: string, username: string, photoUrl?: string }, callback) => {
+      const room = gridRooms[data.room];
+      if (room) {
+        if (!room.claimedSlots[data.num]) {
+           room.claimedSlots[data.num] = { isSelf: false, userId: data.userId, username: data.username, photoUrl: data.photoUrl };
+           io.to(data.room).emit("grid_state", room);
+           if (callback) callback({ success: true });
+        } else {
+           if (callback) callback({ success: false, message: "Slot already taken" });
+        }
+      }
+    });
+
+    socket.on("grid_releaseSlot", (data: { room: string, num: number, userId: string }, callback) => {
+      const room = gridRooms[data.room];
+      if (room && room.claimedSlots[data.num]?.userId === data.userId) {
+         delete room.claimedSlots[data.num];
+         io.to(data.room).emit("grid_state", room);
+         if (callback) callback({ success: true });
+      }
+    });
+
+    socket.on("grid_nextRound", (roomName: string) => {
+       const room = gridRooms[roomName];
+       if (room) {
+          room.claimedSlots = {};
+          room.roundId += 1;
+          io.to(roomName).emit("grid_state", room);
+       }
+    });
+
+    socket.on("placeBet", (data: { roomId: string, userId: string, username: string, amount: number, side: Side, partial: boolean }, callback) => {
       const room = rooms[data.roomId as keyof typeof rooms];
       if (room) {
-        const result = room.placeBet(data.userId, data.username, data.photoUrl, data.amount, data.side, data.number, data.partial);
+        const result = room.placeBet(data.userId, data.username, data.amount, data.side, data.partial);
         if (callback) callback(result);
       } else {
         if (callback) callback({ success: false, message: "Room not found." });

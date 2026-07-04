@@ -12,6 +12,8 @@ interface WheelOfChanceProps {
   isActive?: boolean;
   socket?: any;
   userId?: string;
+  username?: string;
+  photoUrl?: string | null;
 }
 
 type GamePhase = 'lobby' | 'countdown' | 'spinning' | 'announcing' | 'complete';
@@ -21,7 +23,7 @@ interface ChanceHistoryItem {
   winners: { 1?: number; 2?: number; 3?: number };
 }
 
-export function WheelOfChance({
+export const WheelOfChance = React.memo(function WheelOfChance({
   balance,
   setBalance,
   setTransactions,
@@ -30,7 +32,9 @@ export function WheelOfChance({
   soundTicks: parentSoundTicks,
   isActive = true,
   socket,
-  userId
+  userId,
+  username = 'Player',
+  photoUrl
 }: WheelOfChanceProps) {
   // Local sound state
   const [soundEnabled, setSoundEnabled] = useState(parentSoundTicks);
@@ -43,7 +47,34 @@ export function WheelOfChance({
   // Game flow states
   const [phase, setPhase] = useState<GamePhase>('lobby');
   const [countdown, setCountdown] = useState<number>(5);
-  const [claimedSlots, setClaimedSlots] = useState<{ [key: number]: { isSelf: boolean; username: string } }>({});
+  const [claimedSlots, setClaimedSlots] = useState<{ [key: number]: { isSelf: boolean; username: string; photoUrl?: string } }>({});
+  
+  // Realtime syncing
+  useEffect(() => {
+    if (!socket || !isActive) return;
+    
+    socket.emit('grid_join', activeRoom);
+    
+    const onGridState = (state: any) => {
+       if (!state) return;
+       const newClaimed: any = {};
+       Object.keys(state.claimedSlots).forEach((k) => {
+         const slot = state.claimedSlots[k as any];
+         newClaimed[Number(k)] = { ...slot, isSelf: slot.userId === userId };
+       });
+       setClaimedSlots(newClaimed);
+       
+       if (Object.keys(newClaimed).length === maxSlots && phase === 'lobby') {
+          startCountdown();
+       }
+    };
+    
+    socket.on('grid_state', onGridState);
+    return () => {
+       socket.emit('grid_leave', activeRoom);
+       socket.off('grid_state', onGridState);
+    };
+  }, [socket, activeRoom, isActive, phase]);
   const [activeSectors, setActiveSectors] = useState<number[]>(() => {
     const saved = sessionStorage.getItem(`wheelOfChanceState_${activeRoom}`);
     if (saved) {
@@ -52,7 +83,8 @@ export function WheelOfChance({
         if (state.activeSectors && state.activeSectors.length > 0) return state.activeSectors;
       } catch (e) {}
     }
-    return [];
+    const max = activeRoom === '1-10' ? 10 : 20;
+    return Array.from({ length: max }, (_, i) => i + 1);
   });
   const [currentDraw, setCurrentDraw] = useState<1 | 2 | 3>(1);
   const [winners, setWinners] = useState<{ 1?: number; 2?: number; 3?: number }>({});
@@ -184,7 +216,7 @@ export function WheelOfChance({
       cancelAnimationFrame(animationFrameRef.current);
     }
 
-    setPhase('lobby');
+    socket?.emit('grid_nextRound', activeRoom); setPhase('lobby');
     setCurrentDraw(1);
     setWinners({});
     setJustDrawnWinner(null);
@@ -230,22 +262,21 @@ export function WheelOfChance({
     if (claimedSlots[num]) {
       if (claimedSlots[num].isSelf) {
         // Unclaim
-        setBalance(prev => {
-          const newBalance = prev + entryFee;
-          socket?.emit('logTransaction', { userId, amount: entryFee, type: 'refund', description: `Released Slot #${num} (${activeRoom} Room)`, newBalance });
-          return newBalance;
+        socket?.emit('grid_releaseSlot', { room: activeRoom, num, userId }, (res: any) => {
+           if (res?.success) {
+              setBalance(prev => {
+                const newBalance = prev + entryFee;
+                socket?.emit('logTransaction', { userId, amount: entryFee, type: 'refund', description: `Released Slot #${num} (${activeRoom} Room)`, newBalance });
+                return newBalance;
+              });
+              setTransactions(prev => [
+                { id: Date.now(), type: 'bet', desc: `Released Slot #${num} (${activeRoom} Room)`, amount: entryFee, date: 'Just now', positive: true },
+                ...prev
+              ]);
+              setStatusFilament(`• Slot #${num} released.`);
+              playBeep(440, 0.1, 'sine');
+           }
         });
-        setTransactions(prev => [
-          { id: Date.now(), type: 'bet', desc: `Released Slot #${num} (${activeRoom} Room)`, amount: entryFee, date: 'Just now', positive: true },
-          ...prev
-        ]);
-        setClaimedSlots(prev => {
-          const next = { ...prev };
-          delete next[num];
-          setStatusFilament(`• Slot #${num} released.`);
-          return next;
-        });
-        playBeep(440, 0.1, 'sine');
       } else {
         setStatusFilament('• ❌ Slot already secured by another player!');
         playBeep(220, 0.25, 'sawtooth');
@@ -259,30 +290,22 @@ export function WheelOfChance({
       return;
     }
 
-    setBalance(prev => {
-      const newBalance = prev - entryFee;
-      socket?.emit('logTransaction', { userId, amount: -entryFee, type: 'bet', description: `Secured Slot #${num} (P2P ${activeRoom} Room)`, newBalance });
-      return newBalance;
-    });
-    setTransactions(prev => [
-      { id: Date.now(), type: 'bet', desc: `Secured Slot #${num} (P2P ${activeRoom} Room)`, amount: -entryFee, date: 'Just now', positive: false },
-      ...prev
-    ]);
-
-    setClaimedSlots(prev => {
-      const next = { ...prev, [num]: { isSelf: true, username: 'You' } };
-      const count = Object.keys(next).length;
-      playBeep(880, 0.12, 'sine');
-
-      if (count === maxSlots) {
-        setTimeout(() => {
-          if (!isMounted.current) return;
-          startCountdown();
-        }, 300);
+    socket?.emit('grid_claimSlot', { room: activeRoom, num, userId, username, photoUrl }, (res: any) => {
+      if (res?.success) {
+        setBalance(prev => {
+          const newBalance = prev - entryFee;
+          socket?.emit('logTransaction', { userId, amount: -entryFee, type: 'bet', description: `Secured Slot #${num} (P2P ${activeRoom} Room)`, newBalance });
+          return newBalance;
+        });
+        setTransactions(prev => [
+          { id: Date.now(), type: 'bet', desc: `Secured Slot #${num} (P2P ${activeRoom} Room)`, amount: -entryFee, date: 'Just now', positive: false },
+          ...prev
+        ]);
+        playBeep(880, 0.12, 'sine');
       } else {
-        setStatusFilament(`• Slot #${num} claimed. ${count}/${maxSlots} filled...`);
+        setStatusFilament(`• ❌ ${res?.message || 'Slot could not be claimed!'}`);
+        playBeep(220, 0.25, 'sawtooth');
       }
-      return next;
     });
   };
 
@@ -850,11 +873,20 @@ export function WheelOfChance({
                         <motion.div
                           key={num}
                           initial={{ scale: 0.95, opacity: 0 }}
-                          animate={{ scale: 1, opacity: 0.5 }}
-                          className="aspect-square rounded-xl bg-gray-200 dark:bg-zinc-900 border border-gray-300 dark:border-zinc-800/60 flex flex-col items-center justify-center text-gray-600 dark:text-zinc-500 pointer-events-none relative"
+                          animate={{ scale: 1, opacity: 0.8 }}
+                          className="aspect-square rounded-xl bg-gray-200 dark:bg-zinc-900 border border-gray-300 dark:border-zinc-800/60 flex flex-col items-center justify-center text-gray-600 dark:text-zinc-500 pointer-events-none relative overflow-hidden"
                         >
-                          <Lock className="w-3 h-3 text-gray-500 dark:text-zinc-600" />
-                          <span className="text-[8px] font-semibold mt-0.5 truncate max-w-[38px] leading-none">{claim.username}</span>
+                          {claim.photoUrl ? (
+                             <div className="absolute inset-0 opacity-20">
+                               <img src={claim.photoUrl} alt="Avatar" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                             </div>
+                          ) : null}
+                          {claim.photoUrl ? (
+                             <img src={claim.photoUrl} alt="Avatar" className="w-4 h-4 rounded-full mb-0.5 object-cover z-10 shadow-sm" referrerPolicy="no-referrer" />
+                          ) : (
+                             <Lock className="w-3 h-3 text-gray-500 dark:text-zinc-600 z-10" />
+                          )}
+                          <span className="text-[8px] font-semibold mt-0.5 truncate max-w-[38px] leading-none z-10">{claim.username}</span>
                         </motion.div>
                       );
                     }
@@ -949,4 +981,4 @@ export function WheelOfChance({
 
     </div>
   );
-}
+});

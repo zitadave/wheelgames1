@@ -9,7 +9,7 @@ interface OdometerCanvasProps {
   duration?: number;
 }
 
-export function OdometerCanvas({
+export const OdometerCanvas = React.memo(function OdometerCanvas({
   winner,
   onComplete,
   isDarkMode,
@@ -294,4 +294,4 @@ export function OdometerCanvas({
       />
     </div>
   );
-}
+});

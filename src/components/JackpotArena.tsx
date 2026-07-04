@@ -729,18 +729,6 @@ export const JackpotArena = React.memo(function JackpotArena({
         )}
       </AnimatePresence>
 
-      {/* Manual Start Button for lobby without mock peers */}
-      {!showTheater && gamePhase === 'lobby' && Object.keys(activeGrid).length > 0 && (
-        <div className="mb-4">
-          <button 
-            onClick={triggerGlobalFreeze}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-3 rounded-xl shadow-md uppercase tracking-wider text-xs transition-colors"
-          >
-            Force Start Draw Now
-          </button>
-        </div>
-      )}
-
       {/* 3D Trophy Podium Section (No label, placed under the selectors) */}
       {!showTheater && (
         <>

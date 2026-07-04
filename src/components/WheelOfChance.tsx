@@ -751,18 +751,6 @@ export const WheelOfChance = React.memo(function WheelOfChance({
       <div className="text-center py-1 shrink-0 h-4 flex items-center justify-center">
       </div>
 
-      {/* Manual Start Button */}
-      {phase === 'lobby' && Object.keys(claimedSlots).length > 0 && (
-        <div className="px-4 mb-2">
-          <button 
-            onClick={startCountdown}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-3 rounded-xl shadow-md uppercase tracking-wider text-xs transition-colors"
-          >
-            Force Start Wheel Now
-          </button>
-        </div>
-      )}
-
       {/* 4. Good Luck Countdown Overlay */}
       <AnimatePresence>
         {phase === 'countdown' && (

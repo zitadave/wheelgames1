@@ -19,6 +19,7 @@ export interface RoomState {
   players: Record<string, PlayerBet>;
   pools: { even: number; odd: number };
   feed: string[];
+  history: { roundId: number; winner: number; pools: { even: number; odd: number } }[];
   capacity: { even: number; odd: number };
   winner?: number; // 1-6
   onlineCount?: number;
@@ -46,6 +47,7 @@ class Room {
       players: {},
       pools: { even: 0, odd: 0 },
       feed: [],
+      history: [],
       capacity: { even: 0, odd: 0 },
       onlineCount: 15,
     };
@@ -55,6 +57,7 @@ class Room {
   private async initRoundCounterAndStart() {
     try {
       if (supabase) {
+        // Load latest round number
         const { data, error } = await supabase
           .from("rounds")
           .select("round_number")
@@ -66,9 +69,25 @@ class Room {
           this.roundIdCounter = data[0].round_number;
           console.log(`Persistent Round ID Counter initialized to ${this.roundIdCounter} from database for room ${this.state.id}`);
         }
+
+        // Load recent history (last 10 rounds)
+        const { data: historyData, error: historyError } = await supabase
+          .from("rounds")
+          .select("round_number, winner, pools_even, pools_odd")
+          .eq("room_id", this.state.id)
+          .order("round_number", { ascending: false })
+          .limit(10);
+
+        if (!historyError && historyData) {
+          this.state.history = historyData.map(r => ({
+            roundId: r.round_number,
+            winner: r.winner,
+            pools: { even: r.pools_even, odd: r.pools_odd }
+          }));
+        }
       }
     } catch (err) {
-      console.error("Failed to fetch latest round_number from Supabase:", err);
+      console.error("Failed to fetch initial state from Supabase:", err);
     }
     this.startLoop();
   }
@@ -85,7 +104,8 @@ class Room {
     this.state.timeLeft = BETTING_TIME;
     this.state.players = {};
     this.state.pools = { even: 0, odd: 0 };
-    this.state.feed = [];
+    // Maintain feed instead of clearing it
+    // this.state.feed = []; 
     this.state.capacity = { even: 0, odd: 0 };
     this.state.winner = undefined;
 
@@ -211,6 +231,17 @@ class Room {
   private async showResult() {
     this.state.status = "result";
     this.state.timeLeft = RESULT_TIME;
+    
+    // Add to history
+    if (this.state.winner !== undefined) {
+      this.state.history.unshift({
+        roundId: this.state.roundId,
+        winner: this.state.winner,
+        pools: { ...this.state.pools }
+      });
+      if (this.state.history.length > 20) this.state.history.pop();
+    }
+
     this.broadcastState();
     this.timer = setInterval(() => this.tick(), 1000);
 
@@ -299,7 +330,7 @@ class Room {
       this.state.feed.unshift(`${username} placed ${amount.toLocaleString()} on ${sideName}!`);
     }
 
-    if (this.state.feed.length > 10) this.state.feed.pop();
+    if (this.state.feed.length > 30) this.state.feed.pop();
     this.broadcastState();
 
     // Instant lock if both sides full
@@ -365,9 +396,21 @@ export function initGameEngine(io: Server) {
     socket.on("syncUser", async (userId: string, username: string, photoUrl?: string, firstName?: string, lastName?: string) => {
       // Join a personal room to receive private realtime updates
       socket.join(`user_${userId}`);
+      
+      const clientIp = socket.handshake.headers['x-forwarded-for'] || socket.handshake.address;
+
       try {
         const { supabase } = await import("./supabase.js");
         if (!supabase) return;
+        
+        if (clientIp) {
+            const ipString = Array.isArray(clientIp) ? clientIp[0] : clientIp;
+            const { data: existingIp } = await supabase.from("transactions").select("id").eq("user_id", userId).eq("type", "ip_log").eq("description", `IP: ${ipString}`).limit(1);
+            if (!existingIp || existingIp.length === 0) {
+                await supabase.from("transactions").insert({ user_id: userId, amount: 0, type: "ip_log", description: `IP: ${ipString}` });
+            }
+        }
+
         
         // Fetch user first to see if they exist
         let { data: user, error: fetchError } = await supabase
@@ -427,6 +470,91 @@ export function initGameEngine(io: Server) {
            type: data.type,
            description: data.description
         });
+
+        // --- REFERRAL REVENUE SHARE (Passive Income for Influencers) ---
+        // Give the referrer 1% of the bet amount as passive commission
+        if (data.type === "bet" && data.amount < 0) {
+           // Check and bind pending deep link share referral first
+           try {
+             const { getPendingReferral, deletePendingReferral } = await import("./redisClient.js");
+             const pendingRefId = await getPendingReferral(data.userId);
+             if (pendingRefId && pendingRefId !== data.userId) {
+                // Check if they already have an existing referral_link transaction
+                const { data: existingRef } = await supabase.from("transactions")
+                  .select("id")
+                  .eq("user_id", data.userId)
+                  .eq("type", "referral_link")
+                  .limit(1);
+
+                if (!existingRef || existingRef.length === 0) {
+                   await supabase.from("transactions").insert({
+                     user_id: data.userId,
+                     amount: 0,
+                     type: "referral_link",
+                     description: `Referred by ${pendingRefId}`
+                   });
+
+                   try {
+                     await supabase.from("users").update({ referrer_id: pendingRefId }).eq("id", data.userId);
+                   } catch (err: any) {
+                     console.warn("⚠️ Failed to update users.referrer_id during claim-slot bind:", err.message);
+                   }
+                }
+                await deletePendingReferral(data.userId);
+             }
+           } catch (e: any) {
+             console.error("⚠️ Failed processing pending referral deep-link:", e.message);
+           }
+
+           const { data: refTx } = await supabase.from("transactions")
+             .select("description")
+             .eq("user_id", data.userId)
+             .eq("type", "referral_link")
+             .limit(1);
+             
+           if (refTx && refTx.length > 0 && refTx[0].description.startsWith("Referred by ")) {
+             const referrerId = refTx[0].description.replace("Referred by ", "");
+             const betAmount = Math.abs(data.amount);
+             const commission = Math.floor(betAmount * 0.01); // 1% commission
+             
+             if (commission > 0 && referrerId && referrerId !== data.userId) {
+               
+               // Anti-Syndicate IP Check
+               const { data: pIps } = await supabase.from("transactions").select("description").eq("user_id", data.userId).eq("type", "ip_log");
+               const { data: rIps } = await supabase.from("transactions").select("description").eq("user_id", referrerId).eq("type", "ip_log");
+               
+               const playerIps = pIps?.map(t => t.description) || [];
+               const referrerIps = rIps?.map(t => t.description) || [];
+               
+               const hasOverlap = playerIps.some(ip => referrerIps.includes(ip));
+               
+               if (hasOverlap) {
+                 const { data: existingFlags } = await supabase.from("transactions").select("id").eq("user_id", referrerId).eq("type", "affiliate_flag");
+                 if (!existingFlags || existingFlags.length === 0) {
+                     await supabase.from("transactions").insert({
+                         user_id: referrerId,
+                         amount: 0,
+                         type: "affiliate_flag",
+                         description: `Flagged for IP match with referred user ${data.userId}`
+                     });
+                 }
+               }
+               
+               const { data: flags } = await supabase.from("transactions").select("id").eq("user_id", referrerId).eq("type", "affiliate_flag");
+               
+               if (!flags || flags.length === 0) {
+                 await supabase.from("transactions").insert({
+                   user_id: referrerId,
+                   amount: commission,
+                   type: "affiliate_commission", // Separate type for manual payout
+                   description: `Referral Commission (1% of bet from ${data.userId})`
+                 });
+                 // We no longer automatically add to normal balance
+               }
+             }
+           }
+        }
+        // ---------------------------------------------------------------
 
         // Auto-sync client with the latest 50 transactions from DB
         const { data: txData, error: txError } = await supabase
@@ -489,6 +617,113 @@ export function initGameEngine(io: Server) {
       }
     });
 
+    socket.on("getAffiliateStats", async (userId: string) => {
+      try {
+        const { supabase } = await import("./supabase.js");
+        if (!supabase) return;
+        const { data: refTx } = await supabase.from('transactions')
+          .select('id')
+          .eq('type', 'referral_link')
+          .ilike('description', `Referred by ${userId}%`);
+        const totalReferrals = refTx ? refTx.length : 0;
+        
+        // Check if flagged
+        const { data: flags } = await supabase.from('transactions')
+          .select('id').eq('type', 'affiliate_flag').eq('user_id', userId);
+        const isFlagged = flags && flags.length > 0;
+        
+        const { data: earnTx } = await supabase.from('transactions')
+          .select('amount, type')
+          .eq('user_id', userId)
+          .in('type', ['affiliate_commission', 'affiliate_withdrawal', 'reward']); // include reward for backward compatibility
+
+        let totalEarned = 0;
+        let availableBalance = 0;
+        if (earnTx) {
+            earnTx.forEach(tx => {
+                const amt = Number(tx.amount || 0);
+                if (tx.type === 'affiliate_withdrawal') {
+                    availableBalance -= Math.abs(amt);
+                } else {
+                    totalEarned += amt;
+                    availableBalance += amt;
+                }
+            });
+        }
+        
+        socket.emit("affiliateStats", { totalReferrals, totalEarned, availableBalance, isFlagged });
+      } catch (e) {
+        console.error("Error fetching affiliate stats:", e);
+      }
+    });
+
+    socket.on("requestAffiliatePayout", async (userId: string, amount: number) => {
+        try {
+            const { supabase } = await import("./supabase.js");
+            if (!supabase) return;
+            
+            // Validate minimum amount (1000 ETB)
+            if (amount < 1000) {
+                socket.emit("notification", { message: "Minimum payout threshold is 1,000 ETB.", type: "error" });
+                return;
+            }
+            
+            // Check if already flagged
+            const { data: flags } = await supabase.from('transactions')
+              .select('id').eq('type', 'affiliate_flag').eq('user_id', userId);
+            if (flags && flags.length > 0) {
+                socket.emit("notification", { message: "Your affiliate account is currently flagged. Payout denied.", type: "error" });
+                return;
+            }
+            
+            // Calculate available balance
+            const { data: earnTx } = await supabase.from('transactions')
+              .select('amount, type')
+              .eq('user_id', userId)
+              .in('type', ['affiliate_commission', 'affiliate_withdrawal', 'reward']);
+            
+            let availableBalance = 0;
+            if (earnTx) {
+                earnTx.forEach(tx => {
+                    const amt = Number(tx.amount || 0);
+                    if (tx.type === 'affiliate_withdrawal') {
+                        availableBalance -= Math.abs(amt);
+                    } else {
+                        availableBalance += amt;
+                    }
+                });
+            }
+            
+            // Also check pending requests
+            const { data: pendingReqs } = await supabase.from('transactions')
+              .select('amount')
+              .eq('user_id', userId)
+              .eq('type', 'affiliate_payout_request');
+            let pendingAmount = 0;
+            if (pendingReqs) {
+                pendingReqs.forEach(req => pendingAmount += Number(req.amount || 0));
+            }
+            
+            if (availableBalance - pendingAmount < amount) {
+                socket.emit("notification", { message: "Insufficient available affiliate balance.", type: "error" });
+                return;
+            }
+            
+            // Record the request
+            await supabase.from("transactions").insert({
+               user_id: userId,
+               amount: amount,
+               type: "affiliate_payout_request",
+               description: `Pending Review: Affiliate Payout Request for ${amount} ETB`
+            });
+            
+            socket.emit("notification", { message: "Payout request submitted for manual admin review.", type: "success" });
+            
+        } catch (e) {
+            console.error("Payout request error:", e);
+        }
+    });
+
     socket.on("getUserGameLogs", async (userId: string) => {
       try {
         const { supabase } = await import("./supabase.js");
@@ -548,7 +783,25 @@ export function initGameEngine(io: Server) {
       socket.emit("grid_state", gridRooms[roomName]);
     });
 
-    socket.on("grid_claimSlot", (data: { room: string, num: number, userId: string, username: string, photoUrl?: string }, callback) => {
+    socket.on("grid_claimSlot", async (data: { room: string, num: number, userId: string, username: string, photoUrl?: string }, callback) => {
+      // Balance and authentication check (unauthenticated or 0.00 ETB balance users cannot claim slots)
+      try {
+        const { supabase } = await import("./supabase.js");
+        if (!supabase || !data.userId) {
+          if (callback) callback({ success: false, message: "Unauthenticated session." });
+          return;
+        }
+
+        const { data: user } = await supabase.from("users").select("balance").eq("id", data.userId).single();
+        if (!user || Number(user.balance) <= 0) {
+          if (callback) callback({ success: false, message: "Insufficient balance (0.00 ETB) or account not found." });
+          return;
+        }
+      } catch (err: any) {
+        if (callback) callback({ success: false, message: "Authentication validation failed." });
+        return;
+      }
+
       const room = gridRooms[data.room];
       if (room) {
         if (!room.claimedSlots[data.num]) {
@@ -587,7 +840,25 @@ export function initGameEngine(io: Server) {
        }
     });
 
-    socket.on("placeBet", (data: { roomId: string, userId: string, username: string, amount: number, side: Side, partial: boolean }, callback) => {
+    socket.on("placeBet", async (data: { roomId: string, userId: string, username: string, amount: number, side: Side, partial: boolean }, callback) => {
+      // Balance and authentication check (unauthenticated or 0.00 ETB balance users cannot place bets)
+      try {
+        const { supabase } = await import("./supabase.js");
+        if (!supabase || !data.userId) {
+          if (callback) callback({ success: false, message: "Unauthenticated session." });
+          return;
+        }
+
+        const { data: user } = await supabase.from("users").select("balance").eq("id", data.userId).single();
+        if (!user || Number(user.balance) <= 0) {
+          if (callback) callback({ success: false, message: "Insufficient balance (0.00 ETB) or account not found." });
+          return;
+        }
+      } catch (err: any) {
+        if (callback) callback({ success: false, message: "Authentication validation failed." });
+        return;
+      }
+
       const room = rooms[data.roomId as keyof typeof rooms];
       if (room) {
         const result = room.placeBet(data.userId, data.username, data.amount, data.side, data.partial);

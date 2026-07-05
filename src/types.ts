@@ -41,6 +41,8 @@ export interface RoomState {
   players: Record<string, PlayerBet>;
   pools: { even: number; odd: number };
   feed: string[];
+  history: { roundId: number; winner: number; pools: { even: number; odd: number } }[];
   capacity: { even: number; odd: number };
   winner?: number; // 1-6
+  onlineCount?: number;
 }

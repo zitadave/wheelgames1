@@ -15,6 +15,7 @@ interface WheelOfChanceProps {
   username?: string;
   photoUrl?: string | null;
   showNotification?: (msg: string, type: 'success' | 'error' | 'info') => void;
+  initialRoom?: '1-10' | '1-20';
 }
 
 type GamePhase = 'lobby' | 'countdown' | 'spinning' | 'announcing' | 'complete';
@@ -36,7 +37,8 @@ export const WheelOfChance = React.memo(function WheelOfChance({
   userId,
   username = 'Player',
   photoUrl,
-  showNotification
+  showNotification,
+  initialRoom
 }: WheelOfChanceProps) {
   // Local sound state
   const [soundEnabled, setSoundEnabled] = useState(parentSoundTicks);
@@ -44,6 +46,14 @@ export const WheelOfChance = React.memo(function WheelOfChance({
   // Active room selection
   const [activeRoom, setActiveRoom] = useState<'1-10' | '1-20'>('1-10');
   const [isInfoOpen, setIsInfoOpen] = useState<boolean>(false);
+  const [showInviteModal, setShowInviteModal] = useState<boolean>(false);
+  const [shareToken, setShareToken] = useState<string>('');
+
+  useEffect(() => {
+    if (initialRoom) {
+      setActiveRoom(initialRoom);
+    }
+  }, [initialRoom]);
   const maxSlots = activeRoom === '1-10' ? 10 : 20;
   const entryFee = activeRoom === '1-10' ? 500 : 1000; // ETB
 
@@ -328,6 +338,23 @@ export const WheelOfChance = React.memo(function WheelOfChance({
           ...prev
         ]);
         playBeep(880, 0.12, 'sine');
+        if (userId) {
+          fetch('/api/share/generate', {
+             method: 'POST',
+             headers: { 'Content-Type': 'application/json' },
+             body: JSON.stringify({ referrer_id: userId, room_id: activeRoom })
+          })
+          .then(r => r.json())
+          .then(data => {
+             if (data.success && data.token) {
+                setShareToken(data.token);
+                setShowInviteModal(true);
+             }
+          })
+          .catch(err => {
+             console.warn("Failed to generate secure share token gracefully:", err);
+          });
+        }
       } else {
         setStatusFilament(`• ❌ ${res?.message || 'Slot could not be claimed!'}`);
         playBeep(220, 0.25, 'sawtooth');
@@ -1097,6 +1124,71 @@ export const WheelOfChance = React.memo(function WheelOfChance({
               >
                 እሺ ተረዳሁ
               </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Invite Modal for fill the room speed share */}
+      <AnimatePresence>
+        {showInviteModal && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              transition={{ duration: 0.2 }}
+              className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-3xl p-6 w-full max-w-sm shadow-2xl relative text-center"
+            >
+              <button
+                onClick={() => setShowInviteModal(false)}
+                className="absolute top-4 right-4 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-900 text-gray-400 hover:text-gray-600 transition cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+
+              <div className="w-12 h-12 bg-blue-500/10 dark:bg-blue-500/25 text-blue-600 dark:text-blue-400 rounded-full flex items-center justify-center mx-auto mb-4">
+                <Zap size={24} className="animate-pulse" />
+              </div>
+
+              <h3 className="text-lg font-black text-gray-900 dark:text-white mb-2">
+                ⚡ Fill the Room Faster!
+              </h3>
+              
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-6 leading-relaxed">
+                You've secured your position! Invite friends to claim the remaining slots. The grand drawing launches the microsecond the room is full!
+              </p>
+
+              <div className="space-y-3">
+                <button
+                  onClick={() => {
+                    const link = `https://t.me/ETBGameHubBot/app?startapp=${shareToken}`;
+                    const text = `🎮 Join my room in ETB Game Hub! Let's fill the slots and play together! 🚀`;
+                    const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`;
+                    if (typeof window !== "undefined" && window.Telegram?.WebApp) {
+                      window.Telegram.WebApp.openTelegramLink(shareUrl);
+                    } else {
+                      window.open(shareUrl, "_blank");
+                    }
+                  }}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition shadow-md cursor-pointer active:scale-95"
+                >
+                  <Zap size={16} /> Share on Telegram
+                </button>
+
+                <button
+                  onClick={() => {
+                    const link = `https://t.me/ETBGameHubBot/app?startapp=${shareToken}`;
+                    navigator.clipboard.writeText(link);
+                    if (showNotification) {
+                      showNotification("Invite link copied to clipboard!", "success");
+                    }
+                  }}
+                  className="w-full bg-gray-100 dark:bg-gray-900 hover:bg-gray-200 dark:hover:bg-gray-850 text-gray-700 dark:text-gray-300 font-bold py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer active:scale-95"
+                >
+                  Copy Invite Link
+                </button>
+              </div>
             </motion.div>
           </div>
         )}

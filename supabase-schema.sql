@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS users (
     first_name TEXT,
     last_name TEXT,
     balance NUMERIC DEFAULT 100000,
+    last_seen TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
@@ -41,6 +42,16 @@ BEGIN
     END;
     BEGIN
         ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'en';
+    EXCEPTION
+        WHEN duplicate_column THEN null;
+    END;
+    BEGIN
+        ALTER TABLE users ADD COLUMN referrer_id TEXT;
+    EXCEPTION
+        WHEN duplicate_column THEN null;
+    END;
+    BEGIN
+        ALTER TABLE users ADD COLUMN last_seen TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now());
     EXCEPTION
         WHEN duplicate_column THEN null;
     END;

@@ -4,7 +4,8 @@ import { RoomState, Side } from './types';
 import { Wheel } from './components/Wheel';
 import { JackpotArena } from './components/JackpotArena';
 import { WheelOfChance } from './components/WheelOfChance';
-import { Users, Clock, History, AlertCircle, Coins, Moon, Sun, Settings, X, HelpCircle, Search, Trophy, Gamepad2, TrendingUp, Wallet, User, Plus, ArrowUpRight, ArrowDownLeft, Copy, Check, ChevronRight, Dices, Binary, RefreshCw, Info } from 'lucide-react';
+import { Leaderboard } from './components/Leaderboard';
+import { Users, Clock, History, AlertCircle, Coins, Moon, Sun, Settings, X, HelpCircle, Search, Trophy, Gamepad2, TrendingUp, Wallet, User, Plus, ArrowUpRight, ArrowDownLeft, Copy, Check, ChevronRight, Dices, Binary, RefreshCw, Info, Award } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { playWin, playLoss, suspendAudio, resumeAudio } from './utils/sound';
 import { triggerHaptic } from './utils/haptic';
@@ -50,6 +51,7 @@ export default function App() {
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [failedBet, setFailedBet] = useState<{ side: Side; amount: number } | null>(null);
   const [isPlacingBet, setIsPlacingBet] = useState<boolean>(false);
+  const [affiliateStats, setAffiliateStats] = useState<{totalReferrals: number, totalEarned: number, availableBalance: number, isFlagged: boolean} | null>(null);
 
   const showNotification = React.useCallback((message: string, type: 'success' | 'error' | 'info' = 'info') => {
     setNotification({ message, type });
@@ -93,6 +95,21 @@ export default function App() {
   }, [notification]);
 
   useEffect(() => {
+    if (window.Telegram?.WebApp) {
+      const webApp = window.Telegram.WebApp as any;
+      webApp.ready();
+      webApp.expand();
+      webApp.enableClosingConfirmation();
+      try {
+        // This helps prevent background scrolling and unexpected movement
+        webApp.disableVerticalSwipes?.();
+      } catch (e) {
+        console.warn("disableVerticalSwipes not supported", e);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.hidden) {
         suspendAudio();
@@ -108,7 +125,9 @@ export default function App() {
   const [partialBet, setPartialBet] = useState<boolean>(true);
   const [showResult, setShowResult] = useState<boolean>(false);
   const [lastWinner, setLastWinner] = useState<number | null>(null);
-  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [history, setHistory] = useState<HistoryItem[]>(() => {
+    return roomState?.history || [];
+  });
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
 
   const [pulseSide, setPulseSide] = useState<Side | null>(null);
@@ -132,6 +151,44 @@ export default function App() {
   useEffect(() => {
     activeTabRef.current = activeTab;
   }, [activeTab]);
+
+  const [initialRoomChance, setInitialRoomChance] = useState<'1-10' | '1-20' | undefined>(undefined);
+  const [initialTierJackpot, setInitialTierJackpot] = useState<'mini' | 'grand' | undefined>(undefined);
+
+  useEffect(() => {
+    // Get start_param from Telegram WebApp
+    let startParam = "";
+    if (typeof window !== "undefined" && window.Telegram?.WebApp) {
+      startParam = (window.Telegram.WebApp.initDataUnsafe as any)?.start_param || "";
+    }
+
+    if (!BACKEND_URL) return;
+
+    fetch(`${BACKEND_URL}/api/init`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, startParam })
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && data.roomId) {
+          const rId = data.roomId;
+          if (rId === '1-10' || rId === '1-20') {
+            setInitialRoomChance(rId);
+            setActiveTab('chance');
+            showNotification(`Welcome! Switched to Wheel of Chance room ${rId}`, 'success');
+          } else if (rId === 'mini' || rId === 'grand') {
+            setInitialTierJackpot(rId);
+            setActiveTab('jackpot');
+            showNotification(`Welcome! Switched to Jackpot Arena tier ${rId}`, 'success');
+          }
+        }
+      })
+      .catch(err => {
+        console.error("Failed to initialize session with deep link:", err);
+      });
+  }, [userId]);
+
   const [isWalletOpen, setIsWalletOpen] = useState<boolean>(false);
   const [ledgerTab, setLedgerTab] = useState<'play' | 'transactions'>('play');
   const [isJackpotTheaterMode, setIsJackpotTheaterMode] = useState<boolean>(false);
@@ -169,6 +226,36 @@ export default function App() {
     return () => clearTimeout(timeoutId);
   }, []);
 
+  const [leaderboardStats, setLeaderboardStats] = useState<{
+    startOfWeek: string;
+    totalPlatformVolume: number;
+    platformFees: number;
+    promoterJackpot: number;
+    leaderboard: any[];
+  } | null>(null);
+  const [isLeaderboardLoading, setIsLeaderboardLoading] = useState<boolean>(false);
+
+  const fetchLeaderboard = () => {
+    if (!BACKEND_URL) return;
+    setIsLeaderboardLoading(true);
+    fetch(`${BACKEND_URL}/api/leaderboard`)
+      .then(res => res.json())
+      .then(data => {
+        setLeaderboardStats(data);
+        setIsLeaderboardLoading(false);
+      })
+      .catch(err => {
+        console.error("Error fetching leaderboard:", err);
+        setIsLeaderboardLoading(false);
+      });
+  };
+
+  useEffect(() => {
+    if (activeTab === 'profile') {
+      fetchLeaderboard();
+    }
+  }, [activeTab]);
+
   const totalActivePlayersCount = roomState?.onlineCount || 0;
 
   const vipPlayersList = React.useMemo(() => {
@@ -184,14 +271,62 @@ export default function App() {
         username: p.username || `@User_${id.slice(5, 9)}`,
         amount: p.amount,
         side: p.side,
+        photoUrl: p.photoUrl || null,
         badge: p.amount >= 10000 ? "Crown VIP" : p.amount >= 5000 ? "Gold VIP" : "VIP Pro",
         joinTime: "0.1s",
         isReal: true,
       });
     });
 
+    // Ensure current user is always included in the online listing
+    const currentInList = list.some(p => p.id === userId);
+    if (!currentInList) {
+      list.push({
+        id: userId,
+        username: username || "You",
+        photoUrl: photoUrl || null,
+        amount: 0,
+        side: undefined,
+        badge: "Active Player",
+        joinTime: "Online",
+        isReal: true,
+      });
+    }
+
+    // Fill remaining online count using high-fidelity spectator records so list length matches totalActivePlayersCount
+    const remainingCount = totalActivePlayersCount - list.length;
+    if (remainingCount > 0) {
+      const mockSpectators = [
+        { name: "Almaz_K", photo: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=150&q=80" },
+        { name: "Dawit_Y", photo: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&q=80" },
+        { name: "Makeda_Gold", photo: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80" },
+        { name: "Selam_Ethio", photo: "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=150&q=80" },
+        { name: "Yonas_T", photo: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=150&q=80" },
+        { name: "Desta_M", photo: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=150&q=80" },
+        { name: "Teddy_P", photo: "https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?auto=format&fit=crop&w=150&q=80" },
+        { name: "Hirut_S", photo: "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=150&q=80" },
+        { name: "Bereket_A", photo: "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?auto=format&fit=crop&w=150&q=80" },
+        { name: "Tewodros_F", photo: "https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?auto=format&fit=crop&w=150&q=80" }
+      ];
+      for (let i = 0; i < remainingCount; i++) {
+        const mockId = `mock_user_${i}_${roomState?.roundId || 0}`;
+        const itemIdx = (i + (roomState?.roundId || 0)) % mockSpectators.length;
+        const specObj = mockSpectators[itemIdx];
+        list.push({
+          id: mockId,
+          username: specObj.name,
+          photoUrl: specObj.photo,
+          amount: 0,
+          side: undefined,
+          badge: "Spectator VIP",
+          joinTime: "Online",
+          isReal: false
+        });
+      }
+    }
+
     return list;
-  }, [roomState?.roundId, roomState?.players]);
+  }, [roomState?.roundId, roomState?.players, totalActivePlayersCount, userId, username, photoUrl]);
   
   useEffect(() => {
     soundAlertsRef.current = soundAlerts;
@@ -234,6 +369,7 @@ export default function App() {
       socket.emit('syncUser', userId, username, photoUrl, firstName, lastName);
       socket.emit('getUserTransactions', userId);
       socket.emit('getUserGameLogs', userId);
+      socket.emit('getAffiliateStats', userId);
     };
 
     if (socket.connected) {
@@ -252,7 +388,20 @@ export default function App() {
         showNotification(`Wallet updated to ${data.balance.toLocaleString()} ETB`, 'success');
         socket.emit('getUserTransactions', userId);
         socket.emit('getUserGameLogs', userId);
+        socket.emit('getAffiliateStats', userId);
       }
+    });
+
+    socket.on('affiliateStats', (stats: {totalReferrals: number, totalEarned: number, availableBalance: number, isFlagged: boolean}) => {
+      setAffiliateStats(stats);
+    });
+
+    socket.on('notification', (data: { message: string, type: 'success' | 'error' | 'info' }) => {
+        showNotification(data.message, data.type);
+        // If it's a success payout request, refresh affiliate stats
+        if (data.message.includes("Payout request submitted")) {
+            socket.emit("getAffiliateStats", userId);
+        }
     });
 
     socket.on('userTransactions', (data: any[]) => {
@@ -336,6 +485,10 @@ export default function App() {
       setRoomState(state);
       sessionStorage.setItem('roomState', JSON.stringify(state));
 
+      if (state.history) {
+        setHistory(state.history as any);
+      }
+
       if (state.status === 'result' && state.winner) {
         if (!showResult && lastWinner !== state.winner) {
           const isActive = activeTabRef.current === 'even_odd';
@@ -404,20 +557,6 @@ export default function App() {
                  }
              }
           }
-
-          setHistory(prev => {
-             if (prev.some(h => h.roundId === state.roundId)) return prev;
-             const isEven = state.winner! % 2 === 0;
-             const myBet = state.players[userId];
-             const newItem: HistoryItem = { 
-                roundId: state.roundId, 
-                winner: state.winner!, 
-                betAmount: myBet ? myBet.amount : undefined, 
-                betSide: myBet ? myBet.side : undefined, 
-                netWin: myBet ? (isEven === (myBet.side === 'even') ? myBet.amount * (1 - (myBet.amount > 10000 ? 0.05 : 0.10)) : -myBet.amount) : undefined
-             };
-             return [newItem, ...prev].slice(0, 10);
-          });
         }
       } else {
         setShowResult(false);
@@ -579,11 +718,11 @@ export default function App() {
 
   return (
     <div className={isDarkMode ? "dark" : ""}>
-      <div className="h-screen max-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100 flex flex-col max-w-md mx-auto relative overflow-hidden font-sans transition-colors duration-300">
+      <div className="h-screen max-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100 flex flex-col w-full max-w-md mx-auto relative overflow-hidden font-sans transition-colors duration-300 overscroll-none select-none" style={{ touchAction: 'pan-y' }}>
         
         {/* Top Header Panel */}
         {!isJackpotTheaterMode && (
-          <header className="flex justify-between items-center px-4 py-2 bg-white/95 dark:bg-gray-900/95 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 shrink-0 transition-colors duration-300 z-40 fixed top-0 left-0 right-0 max-w-md mx-auto">
+          <header className="flex justify-between items-center px-4 py-2 bg-white/95 dark:bg-gray-900/95 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 shrink-0 transition-colors duration-300 z-40 fixed top-0 left-0 right-0 w-full max-w-md mx-auto">
             {/* Top-Left: Wallet Balance Button (Click to open Wallet drawer) */}
             <button
               onClick={() => setIsWalletOpen(true)}
@@ -623,10 +762,10 @@ export default function App() {
               {/* Profile Icon Button */}
               <button
                 onClick={() => setActiveTab('profile')}
-                className="p-1 rounded-full bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-700 transition-all active:scale-95 cursor-pointer relative w-8 h-8 flex items-center justify-center overflow-hidden"
+                className="p-0 rounded-full bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-700 transition-all active:scale-95 cursor-pointer relative w-8 h-8 flex items-center justify-center overflow-hidden"
               >
                 {photoUrl ? (
-                   <img src={photoUrl} alt="Avatar" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                   <img src={photoUrl} alt="Avatar" className="w-full h-full object-cover rounded-full" referrerPolicy="no-referrer" />
                 ) : (
                    <User className="w-4 h-4" />
                 )}
@@ -655,7 +794,7 @@ export default function App() {
         )}
 
         {/* Scrollable Main Content Frame */}
-        <main className={`flex-1 overflow-y-auto relative z-10 flex flex-col px-4 transition-all duration-300 ${isJackpotTheaterMode ? 'pt-4 pb-4' : 'pt-[52px] pb-[62px]'}`}>
+        <main className={`flex-1 overflow-y-auto overflow-x-hidden relative z-10 flex flex-col px-4 transition-all duration-300 ${isJackpotTheaterMode ? 'pt-4 pb-4' : 'pt-[52px] pb-[62px]'}`}>
             
             {/* TAB 1: Game Arena (Even/Odd) */}
             <div
@@ -805,46 +944,50 @@ export default function App() {
                     <div className="bg-white dark:bg-gray-900 rounded-xl p-3 border border-gray-200 dark:border-gray-800 transition-colors">
                       <div className="flex justify-between items-center mb-2">
                         <h3 className="text-[10px] font-black uppercase text-gray-400 tracking-wider flex items-center gap-1">
-                          <History className="w-3 h-3" /> Recent History
+                          <History className="w-3 h-3" /> Recent Results
                         </h3>
                         <span className="text-[9px] font-semibold text-gray-400">Showing last 10</span>
                       </div>
-                      <div className="space-y-2">
+                      <div className="flex flex-wrap gap-1.5">
                         {history.slice(0, 10).map((h, index) => {
                           const isEven = h.winner % 2 === 0;
-                          const didBet = h.betAmount !== undefined;
-                          const wonBet = didBet && ((isEven && h.betSide === 'even') || (!isEven && h.betSide === 'odd'));
                           return (
                             <div 
                               key={`${h.roundId}-${index}`} 
-                              className="flex justify-between items-center text-xs bg-gray-50 dark:bg-gray-950 p-2.5 rounded-xl border border-gray-100 dark:border-gray-850"
+                              className={`w-8 h-8 rounded-lg flex items-center justify-center font-mono font-black text-[11px] border transition-all ${
+                                isEven 
+                                  ? 'bg-red-500/10 text-red-500 border-red-500/20 shadow-xs' 
+                                  : 'bg-blue-500/10 text-blue-500 border-blue-500/20 shadow-xs'
+                              }`}
+                              title={`Round #${h.roundId}: ${h.winner} (${isEven ? 'Even' : 'Odd'})`}
                             >
-                              <div className="flex items-center gap-2">
-                                <span className="font-black text-gray-400">#{h.roundId}</span>
-                                <span className={`inline-flex items-center font-mono font-black px-2 py-0.5 rounded text-[10px] ${
-                                  isEven 
-                                    ? 'bg-red-500/10 text-red-500 border border-red-500/20' 
-                                    : 'bg-blue-500/10 text-blue-500 border border-blue-500/20'
-                                }`}>
-                                  {h.winner} ({isEven ? 'ሞላ' : 'ጎደል'})
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-1.5">
-                                 {didBet ? (
-                                   <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${
-                                     wonBet 
-                                       ? 'bg-emerald-500/10 text-emerald-500' 
-                                       : 'bg-zinc-500/10 text-zinc-400 dark:text-zinc-500'
-                                   }`}>
-                                     {wonBet ? `+${h.netWin?.toLocaleString()} ETB` : `-${h.betAmount?.toLocaleString()} ETB`}
-                                   </span>
-                                 ) : (
-                                   <span className="text-[9px] text-gray-400 dark:text-zinc-600 uppercase font-bold tracking-wider">No Bet</span>
-                                 )}
-                              </div>
+                              {h.winner}
                             </div>
                           );
                         })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Live Game Log/Feed */}
+                  {roomState?.feed && roomState.feed.length > 0 && (
+                    <div className="bg-white dark:bg-gray-900 rounded-xl p-3 border border-gray-200 dark:border-gray-800 transition-colors">
+                      <div className="flex justify-between items-center mb-2">
+                        <h3 className="text-[10px] font-black uppercase text-gray-400 tracking-wider flex items-center gap-1">
+                          <RefreshCw className="w-3 h-3" /> Live Feed
+                        </h3>
+                        <div className="flex h-1.5 w-1.5 relative">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-500"></span>
+                        </div>
+                      </div>
+                      <div className="space-y-1.5 max-h-[120px] overflow-y-auto pr-1">
+                        {roomState.feed.map((msg, idx) => (
+                          <div key={idx} className="text-[10px] font-bold text-gray-600 dark:text-gray-400 flex items-start gap-1.5 animate-in fade-in slide-in-from-left-1 duration-200">
+                            <span className="text-gray-300 dark:text-gray-700">•</span>
+                            <span className="leading-tight">{msg}</span>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   )}
@@ -867,6 +1010,7 @@ export default function App() {
                   userId={userId}
                   username={username}
                   photoUrl={photoUrl}
+                  initialTier={initialTierJackpot}
                 />
             </div>
 
@@ -885,10 +1029,9 @@ export default function App() {
                   username={username}
                   photoUrl={photoUrl}
                   showNotification={showNotification}
+                  initialRoom={initialRoomChance}
                 />
             </div>
-
-
 
             {/* TAB 4: Profile Page */}
             <div className={`flex-1 p-4 space-y-4 ${activeTab === 'profile' ? 'block' : 'hidden'}`}>
@@ -921,6 +1064,76 @@ export default function App() {
                     </button>
                   </div>
                 </div>
+
+                {/* Affiliate & Earnings Dashboard */}
+                <div className="bg-white dark:bg-gray-900 rounded-2xl p-4 border border-gray-200 dark:border-gray-800 transition-colors shadow-xs space-y-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-[10px] font-black uppercase text-gray-400 tracking-widest">Passive Income</h3>
+                    <Users className="w-3.5 h-3.5 text-blue-500" />
+                  </div>
+                  
+                  {affiliateStats?.isFlagged && (
+                      <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 p-2 rounded-lg text-xs font-medium flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 shrink-0" />
+                          <span>Account flagged for review. Payouts disabled.</span>
+                      </div>
+                  )}
+                  
+                  <div className="flex items-center justify-between py-1">
+                    <span className="text-xs font-bold text-gray-700 dark:text-gray-300">Total Referrals</span>
+                    <span className="text-xs font-black font-mono text-gray-900 dark:text-white bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-md">
+                      {affiliateStats?.totalReferrals || 0}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between py-1 border-t border-gray-100 dark:border-gray-800/40">
+                    <span className="text-xs font-bold text-gray-700 dark:text-gray-300">Total Earned</span>
+                    <span className="text-xs font-black font-mono text-gray-900 dark:text-white bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-md">
+                      {(affiliateStats?.totalEarned || 0).toLocaleString()} ETB
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between py-1 border-t border-gray-100 dark:border-gray-800/40">
+                    <span className="text-xs font-bold text-gray-700 dark:text-gray-300">Available to Withdraw</span>
+                    <span className="text-xs font-black font-mono text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-2 py-0.5 rounded-md">
+                      {(affiliateStats?.availableBalance || 0).toLocaleString()} ETB
+                    </span>
+                  </div>
+                  
+                  <button
+                    onClick={() => {
+                        if (!affiliateStats?.availableBalance || affiliateStats.availableBalance < 1000) {
+                            showNotification("Minimum withdrawal is 1,000 ETB.", "error");
+                            return;
+                        }
+                        const reqAmt = prompt(`Enter amount to withdraw (Available: ${affiliateStats.availableBalance}):`);
+                        if (reqAmt) {
+                            const amt = parseInt(reqAmt, 10);
+                            if (isNaN(amt) || amt < 1000 || amt > affiliateStats.availableBalance) {
+                                showNotification("Invalid amount. Minimum 1,000 ETB.", "error");
+                            } else {
+                                socket?.emit('requestAffiliatePayout', userId, amt);
+                            }
+                        }
+                    }}
+                    disabled={affiliateStats?.isFlagged || (affiliateStats?.availableBalance || 0) < 1000}
+                    className="w-full mt-2 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-gray-900 dark:text-white text-xs font-bold py-2 rounded-xl transition-colors"
+                  >
+                    Request Payout (Min 1,000)
+                  </button>
+                  
+                  <p className="text-[10px] text-gray-500 dark:text-gray-400 leading-tight mt-1">
+                    Invite friends using your link in Telegram to earn <b>1% commission</b> on all their bets. Minimum payout is 1,000 ETB. Subject to manual review.
+                  </p>
+                </div>
+
+                {/* Weekly Referral Leaderboard */}
+                <Leaderboard
+                  stats={leaderboardStats}
+                  isLoading={isLeaderboardLoading}
+                  onRefresh={fetchLeaderboard}
+                  userId={userId}
+                  botUsername={botUsername}
+                  showNotification={showNotification}
+                />
 
                 {/* Profile Controls (Settings & Switches migrated here!) */}
                 <div className="bg-white dark:bg-gray-900 rounded-2xl p-4 border border-gray-200 dark:border-gray-800 transition-colors shadow-xs space-y-3">
@@ -983,7 +1196,7 @@ export default function App() {
 
         {/* Modern Bottom Tabbed Menu Bar */}
         {!isJackpotTheaterMode && (
-          <nav id="bottom-navigation-bar" className="fixed bottom-0 left-0 right-0 bg-white/95 dark:bg-gray-900/95 backdrop-blur-md border-t border-gray-200 dark:border-gray-800 flex justify-around items-center py-1.5 px-1 z-40 transition-colors duration-300 shadow-lg shrink-0 max-w-md mx-auto">
+          <nav id="bottom-navigation-bar" className="fixed bottom-0 left-0 right-0 bg-white/95 dark:bg-gray-900/95 backdrop-blur-md border-t border-gray-200 dark:border-gray-800 flex justify-around items-center py-1.5 px-1 z-40 transition-colors duration-300 shadow-lg shrink-0 w-full max-w-md mx-auto">
             <button
               onClick={() => setActiveTab('even_odd')}
               className={`flex flex-col items-center gap-0.5 flex-1 py-0.5 transition-all cursor-pointer ${
@@ -1555,15 +1768,21 @@ export default function App() {
                               #{index + 1}
                             </span>
 
-                            {/* Avatar with initials */}
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs text-white relative shrink-0 ${
+                            {/* Avatar with image or initials */}
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs text-white relative shrink-0 overflow-hidden ${
                               player.side === 'even' 
                                 ? 'bg-gradient-to-tr from-red-600 to-red-400' 
-                                : 'bg-gradient-to-tr from-blue-600 to-blue-400'
+                                : player.side === 'odd'
+                                ? 'bg-gradient-to-tr from-blue-600 to-blue-400'
+                                : 'bg-gradient-to-tr from-gray-500 to-gray-400'
                             }`}>
-                              {player.username.replace('@', '').charAt(0).toUpperCase()}
+                              {player.photoUrl ? (
+                                <img src={player.photoUrl} alt="Avatar" className="w-full h-full object-cover rounded-full" referrerPolicy="no-referrer" />
+                              ) : (
+                                player.username.replace('@', '').charAt(0).toUpperCase()
+                              )}
                               {player.isReal && (
-                                <span className="absolute -bottom-0.5 -right-0.5 flex h-2.5 w-2.5 items-center justify-center rounded-full bg-green-500 border-2 border-white dark:border-gray-900" />
+                                <span className="absolute -bottom-0.5 -right-0.5 flex h-2.5 w-2.5 items-center justify-center rounded-full bg-green-500 border-2 border-white dark:border-gray-900 z-10" />
                               )}
                             </div>
 
@@ -1588,15 +1807,14 @@ export default function App() {
                           </div>
 
                           {/* Player Bet Details (Omit their exact side choice Even/Odd as requested!) */}
-                          <div className="text-right">
-                            <div className="text-xs font-black text-yellow-600 dark:text-yellow-400 flex items-center justify-end gap-0.5">
-                              <Coins className="w-3.5 h-3.5 shrink-0" />
-                              {player.amount.toLocaleString()}
+                          {player.amount > 0 && (
+                            <div className="text-right">
+                              <div className="text-xs font-black text-yellow-600 dark:text-yellow-400 flex items-center justify-end gap-0.5">
+                                <Coins className="w-3.5 h-3.5 shrink-0" />
+                                {player.amount.toLocaleString()}
+                              </div>
                             </div>
-                            <div className="text-[8px] font-bold text-gray-400 uppercase tracking-widest mt-0.5">
-                              WAGERED
-                            </div>
-                          </div>
+                          )}
                         </div>
                       );
                     })

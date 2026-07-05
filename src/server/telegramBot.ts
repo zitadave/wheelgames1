@@ -521,7 +521,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
     return botInfo?.username || null;
   }
 
-  globalAppUrl = process.env.APP_URL || "https://wheelgames1.onrender.com";
+  globalAppUrl = "https://wheelgames1.onrender.com";
   // Make sure we strip any trailing slash
   globalAppUrl = globalAppUrl.replace(/\/$/, "");
   const appUrl = globalAppUrl;
@@ -572,7 +572,6 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       { command: "withdraw", description: "Withdraw ETB from your balance" },
       { command: "referral", description: "Invite friends and earn rewards" },
       { command: "affiliate", description: "View your affiliate dashboard and earnings" },
-      { command: "promoter_leaderboard", description: "View Weekly Promoter Leaderboard" },
       { command: "support", description: "Show contact support details" },
       { command: "language", description: "Change bot language" },
       { command: "cancel", description: "Cancel current operation or active flows" }
@@ -983,46 +982,6 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       } catch (e: any) {
         logBot(`Error in affiliate stats: ${e.message}`);
         bot.sendMessage(chatId, `❌ <b>Error loading affiliate stats:</b> ${e.message}\n\n<i>Please make sure your database is fully set up and connected!</i>`, { parse_mode: "HTML" });
-      }
-    });
-  });
-
-  bot.onText(/\/promoter_leaderboard/, async (msg) => {
-    await checkRegisteredAndHandle(msg, async () => {
-      const chatId = msg.chat.id;
-      try {
-        const stats = await fetchLeaderboardData();
-        const dateStr = new Date(stats.startOfWeek).toLocaleDateString('en-US', { day: '2-digit', month: '2-digit', year: 'numeric' });
-        
-        let text = `🏆 <b>Weekly Promoter Leaderboard</b>\n\n`;
-        text += `📅 <b>Week of:</b> <code>${dateStr}</code> (Sunday UTC)\n`;
-        text += `💰 <b>Weekly Promoter Jackpot:</b> <b>${stats.promoterJackpot.toLocaleString()} ETB</b>\n`;
-        text += `<i>Funded by 10% of the platform's retained fees from Jackpot and Chance 1-20 rooms this week!</i>\n\n`;
-        
-        text += `👥 <b>Top 10 Active Promoters:</b>\n`;
-        if (stats.leaderboard && stats.leaderboard.length > 0) {
-            stats.leaderboard.forEach((entry, idx) => {
-                const name = entry.first_name || entry.username || `User ${entry.referrer_id.slice(0, 6)}`;
-                const medal = idx === 0 ? "🥇" : idx === 1 ? "🥈" : idx === 2 ? "🥉" : "•";
-                
-                // Estimate split for top 3
-                let estText = "";
-                if (idx === 0) estText = ` (Est: <b>${Math.floor(stats.promoterJackpot * 0.50).toLocaleString()} ETB</b>)`;
-                if (idx === 1) estText = ` (Est: <b>${Math.floor(stats.promoterJackpot * 0.30).toLocaleString()} ETB</b>)`;
-                if (idx === 2) estText = ` (Est: <b>${Math.floor(stats.promoterJackpot * 0.20).toLocaleString()} ETB</b>)`;
-                
-                text += `${medal} <b>${name}</b> | Vol: <code>${entry.volume.toLocaleString()} ETB</code>${estText}\n`;
-            });
-        } else {
-            text += `<i>No referred playing volume yet for this week. Be the first to claim a spot!</i>\n`;
-        }
-        
-        text += `\n📢 <i>Share your referral link using /referral to invite friends. The more they bet in ዕድል (Jackpot) and ፈጣን (1-20) rooms, the higher your volume and share of the weekly jackpot!</i>`;
-        
-        bot.sendMessage(chatId, text, { parse_mode: "HTML" });
-      } catch (e: any) {
-        logBot(`Error displaying promoter leaderboard: ${e.message}`);
-        bot.sendMessage(chatId, `❌ Error loading leaderboard: ${e.message}`);
       }
     });
   });
@@ -2835,7 +2794,6 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
           { command: "withdraw", description: "Withdraw ETB from your balance" },
           { command: "referral", description: "Invite friends and earn rewards" },
           { command: "affiliate", description: "View your affiliate dashboard and earnings" },
-          { command: "promoter_leaderboard", description: "View Weekly Promoter Leaderboard" },
           { command: "support", description: "Show contact support details" },
           { command: "language", description: "Change bot language" },
           { command: "cancel", description: "Cancel current operation or active flows" }
@@ -2878,7 +2836,6 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
               { command: "withdraw", description: "Withdraw ETB from your balance" },
               { command: "referral", description: "Invite friends and earn rewards" },
               { command: "affiliate", description: "View your affiliate dashboard and earnings" },
-              { command: "promoter_leaderboard", description: "View Weekly Promoter Leaderboard" },
               { command: "support", description: "Show contact support details" },
               { command: "language", description: "Change bot language" },
               { command: "cancel", description: "Cancel current operation or active flows" }
@@ -4406,7 +4363,6 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
               { command: "withdraw", description: "Withdraw ETB from your balance" },
               { command: "referral", description: "Invite friends and earn rewards" },
               { command: "affiliate", description: "View your affiliate dashboard and earnings" },
-              { command: "promoter_leaderboard", description: "View Weekly Promoter Leaderboard" },
               { command: "support", description: "Show contact support details" },
               { command: "language", description: "Change bot language" },
               { command: "cancel", description: "Cancel current operation or active flows" }

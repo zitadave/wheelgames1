@@ -526,6 +526,8 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
   globalAppUrl = globalAppUrl.replace(/\/$/, "");
   const appUrl = globalAppUrl;
   
+  logBot(`Bot initializing with APP_URL: ${globalAppUrl}`);
+  
   const TelegramBotClass = typeof TelegramBot === "function" 
     ? TelegramBot 
     : ((TelegramBot as any).default || TelegramBot);

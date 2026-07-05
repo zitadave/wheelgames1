@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import cors from "cors";
 import { createServer as createViteServer } from "vite";
 import { createServer } from "http";
 import { Server } from "socket.io";
@@ -14,6 +15,8 @@ dotenv.config();
 
 async function startServer() {
   const app = express();
+  app.set('trust proxy', 1);
+  app.use(cors());
   app.use(express.json());
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
   
@@ -36,10 +39,10 @@ async function startServer() {
     res.json({ status: "ok" });
   });
 
-  // Rate limiter for Mini App Initialization Endpoint (max 3 per minute per user/IP)
+  // Rate limiter for Mini App Initialization Endpoint (max 10 per minute per user/IP)
   const initLimiter = rateLimit({
     windowMs: 60 * 1000, // 1 minute
-    max: 3,
+    max: 10,
     keyGenerator: (req: any) => {
       return (req.body?.userId || req.query?.userId || req.ip)?.toString();
     },
@@ -48,6 +51,7 @@ async function startServer() {
     },
     legacyHeaders: false,
     standardHeaders: true,
+    validate: { keyGeneratorIpFallback: false },
   });
 
   // Generate secure sharing token mapping (short unpredictable crypt token)

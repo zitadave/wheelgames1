@@ -4,7 +4,7 @@ import { supabase } from "./supabase.js";
 import { getAnalysisSummary } from "./analysis.js";
 import { Server } from "socket.io";
 import { fetchLeaderboardData, getStartOfWeekUTC } from "./leaderboardHelper.js";
-import { startAnnouncementScheduler, loadAnnouncements, saveAnnouncements, Announcement } from "./announcementManager.js";
+import { startAnnouncementScheduler, loadAnnouncements, saveAnnouncements, Announcement, processAnnouncements, generateSlotNumbers, formatEmojiNumbers, downloadAndSendPhoto } from "./announcementManager.js";
 import * as fs from "fs";
 import * as path from "path";
 import { handleSupportChat } from "./aiSupport.js";
@@ -26,6 +26,29 @@ export function logBot(msg: string) {
 
 export function getBotLogs() {
   return botLogs;
+}
+
+async function downloadTelegramPhotoLocally(fileId: string, annId: string): Promise<string> {
+  if (!botInstance) {
+    throw new Error("Telegram bot is not initialized.");
+  }
+  logBot(`Downloading Telegram photo for ${annId} with fileId: ${fileId}`);
+  
+  const uploadsDir = path.join(process.cwd(), "uploads");
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+
+  const fileInfo = await botInstance.getFile(fileId);
+  const originalExt = fileInfo.file_path ? path.extname(fileInfo.file_path) : ".jpg";
+  
+  const downloadedPath = await botInstance.downloadFile(fileId, uploadsDir);
+  const newFilename = `${annId}_${Date.now()}${originalExt}`;
+  const destPath = path.join(uploadsDir, newFilename);
+  
+  fs.renameSync(downloadedPath, destPath);
+  logBot(`Photo saved locally to ${destPath}`);
+  return `uploads/${newFilename}`;
 }
 
 export async function postToChannel(message: string, options?: any) {
@@ -549,52 +572,122 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
 
   try {
     botInfo = await bot.getMe();
-    console.log(`Telegram Bot @${botInfo.username} initialized.`);
-    await syncAdminsFromDB();
-
-    // Set bot commands including custom dynamic ones
-    const systemCommands = [
-      { command: "start", description: "Launch the game hub and display menu" },
-      { command: "play", description: "Launch the Web App immediately" },
-      { command: "balance", description: "Check your current wallet balance" },
-      { command: "deposit", description: "Deposit ETB into your balance" },
-      { command: "withdraw", description: "Withdraw ETB from your balance" },
-      { command: "referral", description: "Invite friends and earn rewards" },
-      { command: "affiliate", description: "View your affiliate dashboard and earnings" },
-      { command: "promoter_leaderboard", description: "View Weekly Promoter Leaderboard" },
-      { command: "support", description: "Show contact support details" },
-      { command: "language", description: "Change bot language" },
-      { command: "cancel", description: "Cancel current operation or active flows" }
-    ];
-
-    const customCommandsList = Object.entries(promptsConfig.custom_commands || {}).map(([cmd, cfg]) => ({
-      command: cmd,
-      description: cfg.description || "Custom command"
-    }));
-
-    try {
-      await bot.setMyCommands([...systemCommands, ...customCommandsList]);
-      logBot("Bot commands updated successfully.");
-    } catch (cmdErr: any) {
-      logBot(`Error setting bot commands: ${cmdErr.message}`);
-    }
-
-    // Update main bot menu button to open the Web App
-    try {
-      await (bot as any).setChatMenuButton({
-        menu_button: {
-          type: "web_app",
-          text: "Play Game 🎮",
-          web_app: { url: appUrl }
-        }
-      });
-      console.log("Telegram Bot menu button configured.");
-    } catch (btnErr) {
-      console.warn("Couldn't set Telegram WebApp menu button:", btnErr);
-    }
-  } catch (err) {
-    console.error("Failed to fetch Bot details or setup commands:", err);
+    logBot(`Telegram Bot @${botInfo.username} initialized.`);
+  } catch (err: any) {
+    logBot(`Failed to fetch Bot details: ${err.message || err}`);
   }
+
+  syncAdminsFromDB().catch(err => {
+    logBot(`Error in syncAdminsFromDB background execution: ${err.message || err}`);
+  });
+
+  // --- TELEGRAM SEO & DISCOVERY OPTIMIZATIONS (Asynchronous/Non-blocking) ---
+  Promise.resolve().then(async () => {
+      try {
+        // 1. Set Bot Name containing Amharic and English high-volume search keywords
+        try {
+          await (bot as any).setMyName({ name: "ዲጂታል ዕጣ | Digital Eta Game Hub" });
+          logBot("SEO: Bot display name optimized for Search.");
+        } catch (e: any) {
+          logBot(`Could not set bot name via setMyName wrapper, trying request method: ${e.message}`);
+          try {
+            await (bot as any)._request('setMyName', { name: "ዲጂታል ዕጣ | Digital Eta Game Hub" });
+          } catch (innerE) {}
+        }
+
+        // 2. Set Bot Description (Max 512 chars) with localized keywords (Amharic & English)
+        const seoDescription = 
+          "እንኳን ወደ ዲጂታል ዕጣ (Digital Eta Game Hub) በደህና መጡ! 🎰 የኢትዮጵያ ቀዳሚ የቴሌግራም መጫወቻ ፕላትፎርም በቴሌብር። በቅጽበት ይጫወቱ፣ ያሸንፉ እና ገንዘብዎን ያውጡ።\n\n" +
+          "Welcome to Digital Eta Game Hub! 🎰 Ethiopia's premier Telegram gaming platform with Telebirr. Play, win, and cash out instantly. Enjoy Even/Odd, Jackpot, and Wheel games!";
+        try {
+          await (bot as any).setMyDescription({ description: seoDescription });
+          logBot("SEO: Bot description optimized for Search.");
+        } catch (e: any) {
+          logBot(`Could not set bot description, trying request method: ${e.message}`);
+          try {
+            await (bot as any)._request('setMyDescription', { description: seoDescription });
+          } catch (innerE) {}
+        }
+
+        // 3. Set Bot Short Description (Max 120 chars)
+        const seoShortDescription = "ዲጂታል ዕጣ (Digital Eta) - ምርጥ የኢትዮጵያ የቴሌግራም መጫወቻ ፕላትፎርም በቴሌብር (Telebirr)።";
+        try {
+          await (bot as any).setMyShortDescription({ short_description: seoShortDescription });
+          logBot("SEO: Bot short description optimized.");
+        } catch (e: any) {
+          logBot(`Could not set bot short description, trying request method: ${e.message}`);
+          try {
+            await (bot as any)._request('setMyShortDescription', { short_description: seoShortDescription });
+          } catch (innerE) {}
+        }
+
+        // 4. Set Channel Title & Description (if CHANNEL_ID is configured and bot is admin)
+        const channelId = process.env.CHANNEL_ID;
+        if (channelId) {
+          try {
+            await bot.setChatTitle(channelId, "ዲጂታል ዕጣ | Digital Eta - Official Channel");
+            logBot("SEO: Channel title optimized.");
+          } catch (e: any) {
+            logBot(`Could not set channel title programmatically: ${e.message}`);
+          }
+
+          try {
+            const channelSeoDesc = 
+              "እንኳን ወደ ዲጂታል ዕጣ (Digital Eta) ይፋዊ ቻናል በደህና መጡ! 🎰 የኢትዮጵያ ቀዳሚ የቴሌግራም መጫወቻ ፕላትፎርም በቴሌብር። በቅጽበት ይጫወቱ፣ ያሸንፉ እና ተሸላሚ ይሁኑ! @scofiled1\n\n" +
+              "Welcome to Digital Eta Official Channel! 🎰 Ethiopia's premier Telegram gaming platform with Telebirr. Play, win, and cash out instantly. Join Even/Odd, Jackpot, and Wheel of Chance!";
+            await bot.setChatDescription(channelId, channelSeoDesc);
+            logBot("SEO: Channel description optimized.");
+          } catch (e: any) {
+            logBot(`Could not set channel description programmatically: ${e.message}`);
+          }
+        }
+      } catch (seoErr: any) {
+        logBot(`Couldn't apply Telegram SEO settings: ${seoErr.message || seoErr}`);
+      }
+
+      // Set bot commands including custom dynamic ones
+      const systemCommands = [
+        { command: "start", description: "Launch the game hub and display menu" },
+        { command: "play", description: "Launch the Web App immediately" },
+        { command: "balance", description: "Check your current wallet balance" },
+        { command: "deposit", description: "Deposit ETB into your balance" },
+        { command: "withdraw", description: "Withdraw ETB from your balance" },
+        { command: "referral", description: "Invite friends and earn rewards" },
+        { command: "affiliate", description: "View your affiliate dashboard and earnings" },
+        { command: "promoter_leaderboard", description: "View Weekly Promoter Leaderboard" },
+        { command: "support", description: "Show contact support details" },
+        { command: "language", description: "Change bot language" },
+        { command: "cancel", description: "Cancel current operation or active flows" }
+      ];
+
+      const customCommandsList = Object.entries(promptsConfig.custom_commands || {}).map(([cmd, cfg]) => ({
+        command: cmd,
+        description: cfg.description || "Custom command"
+      }));
+
+      try {
+        await bot.setMyCommands([...systemCommands, ...customCommandsList]);
+        logBot("Bot commands updated successfully.");
+      } catch (cmdErr: any) {
+        logBot(`Error setting bot commands: ${cmdErr.message}`);
+      }
+
+      // Update main bot menu button to open the Web App
+      try {
+        await (bot as any).setChatMenuButton({
+          menu_button: {
+            type: "web_app",
+            text: "Play Game 🎮",
+            web_app: { url: appUrl }
+          }
+        });
+        logBot("Telegram Bot menu button configured.");
+      } catch (btnErr: any) {
+        logBot(`Couldn't set Telegram WebApp menu button: ${btnErr.message || btnErr}`);
+      }
+    }).catch((err: any) => {
+      logBot(`Failed to fetch Bot details or setup commands in background: ${err.message || err}`);
+    });
 
   // --- HELPERS FOR FLOW START ---
   const handleSupabaseError = (chatId: number, error: any): boolean => {
@@ -1224,7 +1317,10 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       const keyboard = { inline_keyboard: buttons };
 
       if (messageId) {
-        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard });
+        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard })
+          .catch(async () => {
+            await bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: keyboard });
+          });
       } else {
         await bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: keyboard });
       }
@@ -1239,21 +1335,30 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       let queryIdentifier = targetIdentifier.trim();
       let user = null;
 
-      if (queryIdentifier.startsWith('@')) {
-        const username = queryIdentifier.replace('@', '');
-        const { data } = await supabase
-          .from('users')
-          .select('*')
-          .eq('username', username)
-          .single();
-        user = data;
-      } else {
-        const { data } = await supabase
+      // Normalize username input
+      let searchUsername = queryIdentifier;
+      if (searchUsername.startsWith('@')) {
+        searchUsername = searchUsername.substring(1);
+      }
+
+      // 1. Try as exact Telegram ID
+      if (/^\d+$/.test(queryIdentifier)) {
+        const { data: userById } = await supabase
           .from('users')
           .select('*')
           .eq('id', queryIdentifier)
-          .single();
-        user = data;
+          .maybeSingle();
+        user = userById;
+      }
+
+      // 2. Try as exact Username (case-insensitive)
+      if (!user) {
+        const { data: userByUsername } = await supabase
+          .from('users')
+          .select('*')
+          .ilike('username', searchUsername)
+          .maybeSingle();
+        user = userByUsername;
       }
 
       if (!user) {
@@ -1263,38 +1368,110 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
 
       const targetId = user.id;
 
-      const { data: txs } = await supabase.from('transactions').select('amount, type').eq('user_id', targetId);
-      const totalDep = txs?.filter(t => t.type === 'deposit').reduce((s, t) => s + Number(t.amount), 0) || 0;
-      const totalWith = txs?.filter(t => t.type === 'withdraw').reduce((s, t) => s + Number(t.amount), 0) || 0;
-      const totalRewards = txs?.filter(t => t.type === 'reward' || t.type === 'affiliate_withdrawal').reduce((s, t) => s + Number(t.amount), 0) || 0;
+      // Fetch all transactions
+      const { data: txs } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('user_id', targetId);
 
-      const { data: bets } = await supabase.from('bets').select('amount').eq('user_id', targetId);
-      const { data: logs } = await supabase.from('game_logs').select('win_amount').eq('user_id', targetId);
-      const totalBets = bets?.reduce((s, b) => s + Number(b.amount), 0) || 0;
-      const totalWins = logs?.reduce((s, l) => s + Number(l.win_amount), 0) || 0;
+      // In this application, deposits and withdrawals are recorded with different types:
+      // Deposit approval records: type: 'reward', desc: 'Deposit Approved (Ref: ...)'
+      // Withdrawal approval records: type: 'bet', desc: 'Withdrawal Approved (Ref: ...)'
+      // Therefore, checking only type === 'deposit' or type === 'withdraw' is insufficient. We check both.
+      const deposits = txs?.filter(t => 
+        t.type === 'deposit' || 
+        t.description?.includes('Deposit Approved') || 
+        t.description?.toLowerCase().includes('deposit approved')
+      ) || [];
+      const totalDep = deposits.reduce((s, t) => s + Number(t.amount), 0) || 0;
 
-      const { data: referrals } = await supabase.from('users').select('id').eq('referrer_id', targetId);
+      const withdraws = txs?.filter(t => 
+        t.type === 'withdraw' || 
+        t.description?.includes('Withdrawal Approved') || 
+        t.description?.toLowerCase().includes('withdrawal approved')
+      ) || [];
+      const totalWith = withdraws.reduce((s, t) => s + Math.abs(Number(t.amount)), 0) || 0;
+
+      // Affiliate rewards
+      const rewards = txs?.filter(t => 
+        (t.type === 'reward' || t.type === 'affiliate_withdrawal') && 
+        !t.description?.includes('Deposit Approved')
+      ) || [];
+      const totalRewards = rewards.reduce((s, t) => s + Number(t.amount), 0) || 0;
+
+      // Banned state on Affiliate system (indicated by affiliate_flag in transactions table)
+      const affiliateFlags = txs?.filter(t => t.type === 'affiliate_flag') || [];
+      const isAffiliateBanned = affiliateFlags.some(t => t.description?.includes('Banned by Admin'));
+      const affiliateBanDesc = affiliateFlags.find(t => t.description?.includes('Banned by Admin'))?.description || '';
+
+      // Gaming metrics
+      const { data: bets } = await supabase.from('bets').select('*').eq('user_id', targetId);
+      const { data: logs } = await supabase.from('game_logs').select('*').eq('user_id', targetId);
+
+      // Even/Odd game
+      const evenOddBets = bets || [];
+      const totalEvenOddWagered = evenOddBets.reduce((s, b) => s + Number(b.amount), 0) || 0;
+      const evenOddWins = logs?.filter(l => l.game_type?.startsWith('Even/Odd')) || [];
+      const totalEvenOddWins = evenOddWins.reduce((s, l) => s + Number(l.win_amount), 0) || 0;
+
+      // Wheel of Chance
+      const wheelPlays = logs?.filter(l => l.game_type?.toLowerCase().includes('wheel') || l.game_type?.toLowerCase().includes('chance')) || [];
+      const totalWheelWins = wheelPlays.reduce((s, l) => s + Number(l.win_amount), 0) || 0;
+
+      // Jackpot Arena
+      const jackpotPlays = logs?.filter(l => l.game_type?.toLowerCase().includes('jackpot')) || [];
+      const totalJackpotWins = jackpotPlays.reduce((s, l) => s + Number(l.win_amount), 0) || 0;
+
+      const totalRoundsPlayed = evenOddBets.length + wheelPlays.length + jackpotPlays.length;
+      const directReferralsCount = (await supabase.from('users').select('id', { count: 'exact', head: true }).eq('referrer_id', targetId)).count || 0;
+
+      // Player Lifetime GGR (Wagered minus payouts across all games)
+      // Note: Only Even/Odd records bets in the bets table directly. Let's provide clear, split details.
+      const playerProfit = (totalEvenOddWins + totalWheelWins + totalJackpotWins) - totalEvenOddWagered;
+      const netHouseGGR = totalEvenOddWagered - (totalEvenOddWins + totalWheelWins + totalJackpotWins);
+
+      let referrerStr = 'None';
+      if (user.referrer_id) {
+        try {
+          const { data: refUser } = await supabase.from('users').select('username').eq('id', user.referrer_id).maybeSingle();
+          referrerStr = refUser?.username ? `@${refUser.username} (ID: <code>${user.referrer_id}</code>)` : `ID: <code>${user.referrer_id}</code>`;
+        } catch (e) {
+          referrerStr = `ID: <code>${user.referrer_id}</code>`;
+        }
+      }
 
       let report = `👤 <b>Admin User Report:</b> <code>${targetId}</code>\n` +
-                   `━━━━━━━━━━━━━━━━━━━━\n` +
+                   `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
                    `👤 <b>Username:</b> @${user.username || 'N/A'}\n` +
-                   `💰 <b>Current Balance:</b> ${user.balance} ETB\n` +
-                   `📅 <b>Joined:</b> ${new Date(user.created_at).toLocaleDateString()}\n` +
-                   `👥 <b>Total Referrals:</b> ${referrals?.length || 0}\n\n` +
-                   `💳 <b>Financials:</b>\n` +
-                   `📥 <b>Total Deposits:</b> ${totalDep} ETB\n` +
-                   `📤 <b>Total Withdraws:</b> ${totalWith} ETB\n` +
-                   `🎁 <b>Total Rewards:</b> ${totalRewards} ETB\n\n` +
-                   `🎮 <b>Gaming Activity:</b>\n` +
-                   `🎰 <b>Even/Odd Wagered:</b> ${totalBets} ETB\n` +
-                   `🏆 <b>Total Game Wins:</b> ${totalWins} ETB\n` +
-                   `━━━━━━━━━━━━━━━━━━━━`;
+                   `🏷️ <b>Full Name:</b> ${escapeHTML(`${user.first_name || ''} ${user.last_name || ''}`.trim() || 'N/A')}\n` +
+                   `📞 <b>Phone Number:</b> <code>${user.phone || 'N/A'}</code>\n` +
+                   `🌐 <b>Language Preference:</b> <code>${user.language || 'en'}</code>\n` +
+                   `🤝 <b>Referred By:</b> ${referrerStr}\n` +
+                   `👑 <b>Admin Status:</b> ${user.is_admin ? '👑 Yes' : '👤 Regular Player'}\n` +
+                   `🛡️ <b>Affiliate Status:</b> ${isAffiliateBanned ? '🔴 BANNED (' + escapeHTML(affiliateBanDesc) + ')' : '🟢 Active'}\n` +
+                   `📅 <b>Joined:</b> ${new Date(user.created_at).toLocaleString('en-US')}\n` +
+                   `🕒 <b>Last Seen:</b> ${user.last_seen ? new Date(user.last_seen).toLocaleString('en-US') : '<i>Never</i>'}\n` +
+                   `👥 <b>Direct Referrals:</b> ${directReferralsCount} users\n\n` +
+                   `💳 <b>Financial Summary:</b>\n` +
+                   `💰 <b>Current Balance:</b> <code>${Number(user.balance).toLocaleString()} ETB</code>\n` +
+                   `📥 <b>Total Deposits:</b> <code>${totalDep.toLocaleString()} ETB</code> (${deposits.length} approved)\n` +
+                   `📤 <b>Total Withdraws:</b> <code>${totalWith.toLocaleString()} ETB</code> (${withdraws.length} approved)\n` +
+                   `🎁 <b>Total Rewards/Comms:</b> <code>${totalRewards.toLocaleString()} ETB</code>\n\n` +
+                   `🎮 <b>Gaming Statistics:</b>\n` +
+                   `🔄 <b>Total Rounds:</b> ${totalRoundsPlayed} rounds played\n` +
+                   `🎲 <b>Even/Odd Wagered:</b> <code>${totalEvenOddWagered.toLocaleString()} ETB</code> (${evenOddBets.length} plays)\n` +
+                   `🏆 <b>Even/Odd Wins:</b> <code>${totalEvenOddWins.toLocaleString()} ETB</code>\n` +
+                   `🎡 <b>Wheel Spins:</b> ${wheelPlays.length} spins (Wins: <code>${totalWheelWins.toLocaleString()} ETB</code>)\n` +
+                   `🎟️ <b>Jackpot Plays:</b> ${jackpotPlays.length} entries (Wins: <code>${totalJackpotWins.toLocaleString()} ETB</code>)\n` +
+                   `📈 <b>Net Player Profit:</b> <code>${playerProfit > 0 ? '+' : ''}${playerProfit.toLocaleString()} ETB</code>\n` +
+                   `📉 <b>House GGR (Revenue):</b> <code>${netHouseGGR > 0 ? '+' : ''}${netHouseGGR.toLocaleString()} ETB</code>\n` +
+                   `━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 
       userStates.set(String(chatId), { step: 'idle' });
       await bot.sendMessage(chatId, report, { parse_mode: "HTML" });
     } catch (err: any) {
       logBot(`Lookup Error: ${err.message}`);
-      await bot.sendMessage(chatId, "❌ An error occurred during lookup.");
+      await bot.sendMessage(chatId, `❌ An error occurred during lookup: ${err.message}`);
     }
   }
 
@@ -1336,6 +1513,111 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
         .catch(() => bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: keyboard }));
     } else {
       bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: keyboard });
+    }
+  }
+
+  async function renderAnnouncementsDashboard(chatId: number, messageId?: number) {
+    try {
+      const anns = loadAnnouncements();
+      let text = "📢 <b>Announcements Control Dashboard</b>\n\n";
+      text += `Total registered automatic channel announcements: <b>${anns.length}</b>\n\n`;
+      text += "<i>Click on any announcement below to manage its text, photo, interval, or to toggle it ON/OFF instantly:</i>";
+
+      const rows: any[][] = [];
+      for (let i = 0; i < anns.length; i += 2) {
+        const rowButtons = [];
+        const ann1 = anns[i];
+        rowButtons.push({
+          text: `${ann1.enabled ? "🟢" : "🔴"} ${ann1.id}`,
+          callback_data: `ann_view:${ann1.id}`
+        });
+        if (i + 1 < anns.length) {
+          const ann2 = anns[i + 1];
+          rowButtons.push({
+            text: `${ann2.enabled ? "🟢" : "🔴"} ${ann2.id}`,
+            callback_data: `ann_view:${ann2.id}`
+          });
+        }
+        rows.push(rowButtons);
+      }
+
+      rows.push([{ text: "➕ Create Custom Announcement", callback_data: "ann_create_start" }]);
+      rows.push([{ text: "▶️ Force Run All Scheduler Now", callback_data: "control_test_announcement_all" }]);
+      rows.push([{ text: "◀️ Back to Control Panel", callback_data: "control_panel_back" }]);
+
+      const keyboard = { inline_keyboard: rows };
+
+      if (messageId) {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard })
+          .catch(() => bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: keyboard }));
+      } else {
+        await bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: keyboard });
+      }
+    } catch (err: any) {
+      logBot(`Error rendering announcements dashboard: ${err.message}`);
+      await bot.sendMessage(chatId, "❌ Error loading announcements dashboard.");
+    }
+  }
+
+  async function renderAnnouncementDetail(chatId: number, annId: string, messageId?: number) {
+    try {
+      const anns = loadAnnouncements();
+      const ann = anns.find(a => a.id === annId);
+      if (!ann) {
+        await bot.sendMessage(chatId, `❌ Announcement <code>${annId}</code> not found.`, { parse_mode: "HTML" });
+        return;
+      }
+
+      let lastRunStr = "Never";
+      if (ann.lastRunTime) {
+        const diffMs = Date.now() - ann.lastRunTime;
+        const diffHrs = Math.floor(diffMs / (3600 * 1000));
+        const diffMins = Math.floor((diffMs % (3600 * 1000)) / (60 * 1000));
+        if (diffHrs > 0) {
+          lastRunStr = `${diffHrs}h ${diffMins}m ago`;
+        } else {
+          lastRunStr = `${diffMins}m ago`;
+        }
+      }
+
+      let text = `📝 <b>Announcement Details</b>\n\n`;
+      text += `• <b>ID:</b> <code>${ann.id}</code>\n`;
+      text += `• <b>Type:</b> <code>${ann.type}</code>\n`;
+      text += `• <b>Status:</b> ${ann.enabled ? "🟢 Enabled" : "🔴 Disabled"}\n`;
+      text += `• <b>Interval:</b> <b>${ann.intervalHours || 24} hours</b>\n`;
+      text += `• <b>Last Sent:</b> <i>${lastRunStr}</i>\n`;
+      text += `• <b>Photo:</b> ${ann.photoUrl ? `<code>${escapeHTML(ann.photoUrl.substring(0, 45))}...</code>` : "<i>None</i>"}\n\n`;
+      text += `📖 <b>Message Text:</b>\n`;
+      text += `----------------------------------------\n`;
+      text += `${ann.text ? escapeHTML(ann.text) : "<i>(Dynamic Content Generated at Runtime)</i>"}\n`;
+      text += `----------------------------------------\n`;
+
+      const keyboard = {
+        inline_keyboard: [
+          [
+            { text: ann.enabled ? "🔴 Disable" : "🟢 Enable", callback_data: `ann_toggle:${ann.id}` },
+            { text: "⏱️ Interval", callback_data: `ann_edit_int_sel:${ann.id}` }
+          ],
+          [
+            { text: "✍️ Edit Text", callback_data: `ann_edit_text:${ann.id}` },
+            { text: "🖼️ Edit Photo", callback_data: `ann_edit_photo:${ann.id}` }
+          ],
+          [
+            { text: "⚡ Force Send Single", callback_data: `ann_send_single:${ann.id}` },
+            { text: "🗑️ Delete", callback_data: `ann_delete_conf:${ann.id}` }
+          ],
+          [{ text: "🔙 Back to List", callback_data: "control_announcements" }]
+        ]
+      };
+
+      if (messageId) {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard })
+          .catch(() => bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: keyboard }));
+      } else {
+        await bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: keyboard });
+      }
+    } catch (err: any) {
+      logBot(`Error rendering announcement detail for ${annId}: ${err.message}`);
     }
   }
 
@@ -2192,6 +2474,261 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
         logBot(`Error updating AI instructions: ${err.message}`);
         await bot.sendMessage(chatId, "❌ Failed to update instructions. Please try again.");
       }
+      return;
+    }
+
+    // --- ANNOUNCEMENT EDIT/CREATE STATE FLOWS ---
+
+    // 1. Edit custom interval
+    if (editState && editState.step === 'waiting_for_ann_interval' && editState.editingKey) {
+      if (!numUserId || !isStartingAdmin(numUserId)) {
+        userStates.set(userId, { step: 'idle' });
+        return;
+      }
+      if (text === "/cancel") {
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, "❌ Editing interval cancelled.");
+        await renderAnnouncementDetail(chatId, editState.editingKey);
+        return;
+      }
+      const val = parseInt(text, 10);
+      if (isNaN(val) || val <= 0) {
+        await bot.sendMessage(chatId, "⚠️ Please send a valid number of hours (must be greater than 0).");
+        return;
+      }
+      const anns = loadAnnouncements();
+      const ann = anns.find(a => a.id === editState.editingKey);
+      if (ann) {
+        ann.intervalHours = val;
+        saveAnnouncements(anns);
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, `✅ Interval for <code>${ann.id}</code> successfully updated to <b>${val} hours</b>.`, { parse_mode: "HTML" });
+        await renderAnnouncementDetail(chatId, ann.id);
+      } else {
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, "❌ Announcement not found.");
+      }
+      return;
+    }
+
+    // 2. Edit message text
+    if (editState && editState.step === 'waiting_for_ann_text' && editState.editingKey) {
+      if (!numUserId || !isStartingAdmin(numUserId)) {
+        userStates.set(userId, { step: 'idle' });
+        return;
+      }
+      if (text === "/cancel") {
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, "❌ Editing text cancelled.");
+        await renderAnnouncementDetail(chatId, editState.editingKey);
+        return;
+      }
+      if (!text) {
+        await bot.sendMessage(chatId, "⚠️ Message text cannot be empty.");
+        return;
+      }
+      const anns = loadAnnouncements();
+      const ann = anns.find(a => a.id === editState.editingKey);
+      if (ann) {
+        ann.text = msg.text || ""; // use full text including formatting
+        saveAnnouncements(anns);
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, `✅ Caption text for <code>${ann.id}</code> successfully updated!`, { parse_mode: "HTML" });
+        await renderAnnouncementDetail(chatId, ann.id);
+      } else {
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, "❌ Announcement not found.");
+      }
+      return;
+    }
+
+    // 3. Edit photo URL
+    if (editState && editState.step === 'waiting_for_ann_photo' && editState.editingKey) {
+      if (!numUserId || !isStartingAdmin(numUserId)) {
+        userStates.set(userId, { step: 'idle' });
+        return;
+      }
+      if (text === "/cancel") {
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, "❌ Editing photo cancelled.");
+        await renderAnnouncementDetail(chatId, editState.editingKey);
+        return;
+      }
+
+      let photoUrl = "";
+      if (msg.photo && msg.photo.length > 0) {
+        try {
+          await bot.sendMessage(chatId, "⏳ Downloading and saving photo locally on server...");
+          const fileId = msg.photo[msg.photo.length - 1].file_id;
+          photoUrl = await downloadTelegramPhotoLocally(fileId, editState.editingKey);
+        } catch (err: any) {
+          logBot(`Error downloading upload: ${err.message}`);
+          await bot.sendMessage(chatId, `❌ Failed to save photo: ${err.message}`);
+          return;
+        }
+      } else if (text) {
+        photoUrl = text.toLowerCase() === "none" ? "" : text;
+      } else {
+        await bot.sendMessage(chatId, "⚠️ Please upload a photo directly, or send an image URL (or type <code>none</code> to remove photo):", { parse_mode: "HTML" });
+        return;
+      }
+
+      const anns = loadAnnouncements();
+      const ann = anns.find(a => a.id === editState.editingKey);
+      if (ann) {
+        ann.photoUrl = photoUrl || undefined;
+        saveAnnouncements(anns);
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, `✅ Photo for <code>${ann.id}</code> successfully updated!`, { parse_mode: "HTML" });
+        await renderAnnouncementDetail(chatId, ann.id);
+      } else {
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, "❌ Announcement not found.");
+      }
+      return;
+    }
+
+    // 4. Create Step 1: ID
+    if (editState && editState.step === 'waiting_for_ann_create_id') {
+      if (!numUserId || !isStartingAdmin(numUserId)) {
+        userStates.set(userId, { step: 'idle' });
+        return;
+      }
+      if (text === "/cancel") {
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, "❌ Creation cancelled.");
+        await renderAnnouncementsDashboard(chatId);
+        return;
+      }
+      const proposedId = text.toLowerCase().replace(/[^a-z0-9_]/g, "");
+      if (!proposedId) {
+        await bot.sendMessage(chatId, "⚠️ Invalid ID. Use alphanumeric characters and underscores only (e.g., promo_week_2).");
+        return;
+      }
+      const anns = loadAnnouncements();
+      const existing = anns.find(a => a.id === proposedId);
+      if (existing) {
+        await bot.sendMessage(chatId, `⚠️ An announcement with ID <code>${proposedId}</code> already exists. Please choose a different unique ID:`, { parse_mode: "HTML" });
+        return;
+      }
+      
+      // Save ID and move to step 2 (text)
+      userStates.set(userId, {
+        step: "waiting_for_ann_create_text",
+        editingKey: proposedId, // Use editingKey as the new ID
+        field: editState.field   // Type (e.g., 'promotion')
+      });
+      await bot.sendMessage(chatId, `✍️ <b>Step 2/4: Announcement Text</b>\n\nPlease send the message text for <code>${proposedId}</code>. You can use standard HTML formatting tags.\n\nType /cancel to abort.`, { parse_mode: "HTML" });
+      return;
+    }
+
+    // 5. Create Step 2: Text
+    if (editState && editState.step === 'waiting_for_ann_create_text' && editState.editingKey) {
+      if (!numUserId || !isStartingAdmin(numUserId)) {
+        userStates.set(userId, { step: 'idle' });
+        return;
+      }
+      if (text === "/cancel") {
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, "❌ Creation cancelled.");
+        await renderAnnouncementsDashboard(chatId);
+        return;
+      }
+      if (!text) {
+        await bot.sendMessage(chatId, "⚠️ Please send valid message text.");
+        return;
+      }
+      
+      // Save text and move to step 3 (photo)
+      userStates.set(userId, {
+        step: "waiting_for_ann_create_photo",
+        editingKey: editState.editingKey, // The new ID
+        field: editState.field,           // Type
+        new_label: msg.text || ""         // The new text
+      });
+      await bot.sendMessage(chatId, `🖼️ <b>Step 3/4: Announcement Photo</b>\n\nPlease <b>upload/send a photo directly</b> in this chat, or send an image URL (or type <code>none</code> to omit photo):\n\nType /cancel to abort.`, { parse_mode: "HTML" });
+      return;
+    }
+
+    // 6. Create Step 3: Photo
+    if (editState && editState.step === 'waiting_for_ann_create_photo' && editState.editingKey) {
+      if (!numUserId || !isStartingAdmin(numUserId)) {
+        userStates.set(userId, { step: 'idle' });
+        return;
+      }
+      if (text === "/cancel") {
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, "❌ Creation cancelled.");
+        await renderAnnouncementsDashboard(chatId);
+        return;
+      }
+      
+      let photoUrl = "";
+      if (msg.photo && msg.photo.length > 0) {
+        try {
+          await bot.sendMessage(chatId, "⏳ Downloading and saving photo locally on server...");
+          const fileId = msg.photo[msg.photo.length - 1].file_id;
+          photoUrl = await downloadTelegramPhotoLocally(fileId, editState.editingKey);
+        } catch (err: any) {
+          logBot(`Error downloading upload: ${err.message}`);
+          await bot.sendMessage(chatId, `❌ Failed to save photo: ${err.message}`);
+          return;
+        }
+      } else if (text) {
+        photoUrl = text.toLowerCase() === "none" ? "" : text;
+      } else {
+        await bot.sendMessage(chatId, "⚠️ Please upload a photo directly, or send an image URL (or type <code>none</code> to omit photo):", { parse_mode: "HTML" });
+        return;
+      }
+      
+      // Save photo and move to step 4 (interval)
+      userStates.set(userId, {
+        step: "waiting_for_ann_create_interval",
+        editingKey: editState.editingKey, // ID
+        field: editState.field,           // Type
+        new_label: editState.new_label,   // Text
+        bank: photoUrl                    // Photo (using bank field as transient store)
+      });
+      await bot.sendMessage(chatId, `⏱️ <b>Step 4/4: Interval (Hours)</b>\n\nPlease send the repeat interval in hours (e.g., <code>12</code> or <code>48</code>):\n\nType /cancel to abort.`, { parse_mode: "HTML" });
+      return;
+    }
+
+    // 7. Create Step 4: Interval & Save
+    if (editState && editState.step === 'waiting_for_ann_create_interval' && editState.editingKey) {
+      if (!numUserId || !isStartingAdmin(numUserId)) {
+        userStates.set(userId, { step: 'idle' });
+        return;
+      }
+      if (text === "/cancel") {
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, "❌ Creation cancelled.");
+        await renderAnnouncementsDashboard(chatId);
+        return;
+      }
+      const val = parseInt(text, 10);
+      if (isNaN(val) || val <= 0) {
+        await bot.sendMessage(chatId, "⚠️ Please send a valid number of hours (greater than 0).");
+        return;
+      }
+
+      // Finalize and save the new announcement!
+      const anns = loadAnnouncements();
+      const newAnn: Announcement = {
+        id: editState.editingKey,
+        type: (editState.field || "promotion") as any,
+        text: editState.new_label || "",
+        photoUrl: editState.bank || undefined,
+        intervalHours: val,
+        lastRunTime: 0,
+        enabled: true
+      };
+      
+      anns.push(newAnn);
+      saveAnnouncements(anns);
+      
+      userStates.set(userId, { step: 'idle' });
+      await bot.sendMessage(chatId, `🎉 <b>New Announcement Created Successfully!</b>\n\nID: <code>${newAnn.id}</code>\nInterval: <b>${val} hours</b>\n\nIt is now registered in the automatic scheduler.`, { parse_mode: "HTML" });
+      await renderAnnouncementDetail(chatId, newAnn.id);
       return;
     }
 
@@ -3490,8 +4027,20 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
     const userId = query.from.id.toString();
     const data = query.data;
 
-    // Update last_seen in background
-    supabase.from('users').update({ last_seen: new Date().toISOString() }).eq('id', userId).then(({ error }) => { if (error) console.error(error); });
+    if (!data) {
+      try {
+        await bot.answerCallbackQuery(query.id);
+      } catch (err) {
+        console.error("Empty callback answer failed:", err);
+      }
+      return;
+    }
+
+    try {
+      logBot(`[Callback Query] data=${data} user=${userId} chat=${chatId}`);
+
+      // Update last_seen in background
+      supabase.from('users').update({ last_seen: new Date().toISOString() }).eq('id', userId).then(({ error }) => { if (error) console.error(error); });
 
     if (data?.startsWith("analysis_")) {
       if (!isStartingAdmin(parseInt(userId, 10))) {
@@ -3629,7 +4178,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
     }
 
     if (data === "control_user_lookup") {
-      if (!isStartingAdmin(parseInt(userId, 10))) {
+      if (!adminChatIds.has(parseInt(userId, 10))) {
         bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
         return;
       }
@@ -3639,7 +4188,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
     }
 
     if (data?.startsWith("lookup_user:")) {
-      if (!isStartingAdmin(parseInt(userId, 10))) return;
+      if (!adminChatIds.has(parseInt(userId, 10))) return;
       const targetId = data.split(":")[1];
       await bot.answerCallbackQuery(query.id);
       await processUserLookup(chatId, targetId);
@@ -3647,7 +4196,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
     }
 
     if (data === "lookup_manual_search") {
-      if (!isStartingAdmin(parseInt(userId, 10))) return;
+      if (!adminChatIds.has(parseInt(userId, 10))) return;
       userStates.set(userId, { step: "waiting_for_lookup_id" });
       await bot.answerCallbackQuery(query.id);
       await bot.sendMessage(chatId, "🔍 <b>Manual Search</b>\n\nPlease send the <b>Telegram ID</b> or <b>@username</b> of the user you want to investigate.\n\nType /cancel to abort.", { parse_mode: "HTML" });
@@ -4061,17 +4610,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
         return;
       }
       await bot.answerCallbackQuery(query.id);
-      const anns = loadAnnouncements();
-      let text = "📢 <b>Announcements Control</b>\n\n";
-      text += `Total announcements: ${anns.length}\n\n`;
-      text += "Use commands:\n/announcement\n/announcement_delete <id>";
-      const keyboard = {
-        inline_keyboard: [
-           [{ text: "▶️ Test All Announcements Now", callback_data: "control_test_announcement_all" }],
-           [{ text: "◀️ Back to Control Panel", callback_data: "control_panel_back" }]
-        ]
-      };
-      bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard });
+      await renderAnnouncementsDashboard(chatId, messageId);
       return;
     }
     
@@ -4081,14 +4620,316 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
         return;
       }
       await bot.answerCallbackQuery(query.id);
-      const { processAnnouncements } = require("./announcementManager.js");
       // Force trigger all
       const anns = loadAnnouncements();
       for (const ann of anns) {
         ann.lastRunTime = 0;
       }
       saveAnnouncements(anns);
-      bot.sendMessage(chatId, "✅ All announcements will trigger on the next scheduler tick (max 5 mins). You can check the channel.");
+      await processAnnouncements(bot);
+      await bot.sendMessage(chatId, "✅ All announcements have been triggered to run instantly! Please check your channel.");
+      await renderAnnouncementsDashboard(chatId, messageId);
+      return;
+    }
+
+    if (data.startsWith("ann_view:")) {
+      if (!isStartingAdmin(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      const annId = data.substring("ann_view:".length);
+      await renderAnnouncementDetail(chatId, annId, messageId);
+      return;
+    }
+
+    if (data.startsWith("ann_toggle:")) {
+      if (!isStartingAdmin(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      const annId = data.substring("ann_toggle:".length);
+      const anns = loadAnnouncements();
+      const ann = anns.find(a => a.id === annId);
+      if (ann) {
+        ann.enabled = !ann.enabled;
+        saveAnnouncements(anns);
+        await bot.answerCallbackQuery(query.id, { text: `Announcement is now ${ann.enabled ? 'Enabled 🟢' : 'Disabled 🔴'}` });
+        await renderAnnouncementDetail(chatId, annId, messageId);
+      } else {
+        await bot.answerCallbackQuery(query.id, { text: "❌ Announcement not found." });
+      }
+      return;
+    }
+
+    if (data.startsWith("ann_edit_int_sel:")) {
+      if (!isStartingAdmin(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      const annId = data.substring("ann_edit_int_sel:".length);
+      const text = `⏱️ <b>Select New Interval for <code>${annId}</code>:</b>\n\nChoose from preset options or click custom to type a specific value (in hours).`;
+      
+      const keyboard = {
+        inline_keyboard: [
+          [
+            { text: "1 Hour", callback_data: `ann_set_int:${annId}:1` },
+            { text: "4 Hours", callback_data: `ann_set_int:${annId}:4` },
+            { text: "8 Hours", callback_data: `ann_set_int:${annId}:8` }
+          ],
+          [
+            { text: "12 Hours", callback_data: `ann_set_int:${annId}:12` },
+            { text: "24 Hours (1 Day)", callback_data: `ann_set_int:${annId}:24` },
+            { text: "48 Hours (2 Days)", callback_data: `ann_set_int:${annId}:48` }
+          ],
+          [
+            { text: "168 Hours (1 Week)", callback_data: `ann_set_int:${annId}:168` },
+            { text: "⌨️ Custom (Type)", callback_data: `ann_edit_int_custom:${annId}` }
+          ],
+          [{ text: "🔙 Cancel", callback_data: `ann_view:${annId}` }]
+        ]
+      };
+
+      if (messageId) {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard });
+      }
+      return;
+    }
+
+    if (data.startsWith("ann_set_int:")) {
+      if (!isStartingAdmin(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      const parts = data.split(":");
+      const annId = parts[1];
+      const hours = parseInt(parts[2], 10);
+      
+      const anns = loadAnnouncements();
+      const ann = anns.find(a => a.id === annId);
+      if (ann && !isNaN(hours)) {
+        ann.intervalHours = hours;
+        saveAnnouncements(anns);
+        await bot.answerCallbackQuery(query.id, { text: `Interval updated to ${hours}h ✅` });
+        await renderAnnouncementDetail(chatId, annId, messageId);
+      } else {
+        await bot.answerCallbackQuery(query.id, { text: "❌ Failed to update interval." });
+      }
+      return;
+    }
+
+    if (data.startsWith("ann_edit_int_custom:")) {
+      if (!isStartingAdmin(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      const annId = data.substring("ann_edit_int_custom:".length);
+      
+      userStates.set(userId, { step: "waiting_for_ann_interval", editingKey: annId });
+      await bot.sendMessage(chatId, `⏱️ <b>Custom Interval:</b>\n\nPlease type the interval in <b>hours</b> (e.g., <code>6</code> or <code>36</code>) for <code>${annId}</code>:\n\nType /cancel to abort.`, { parse_mode: "HTML" });
+      return;
+    }
+
+    if (data.startsWith("ann_edit_text:")) {
+      if (!isStartingAdmin(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      const annId = data.substring("ann_edit_text:".length);
+      
+      userStates.set(userId, { step: "waiting_for_ann_text", editingKey: annId });
+      await bot.sendMessage(chatId, `✍️ <b>Edit Caption/Text:</b>\n\nPlease send the new message text for <code>${annId}</code>. You can use standard HTML tags like <code>&lt;b&gt;</code>, <code>&lt;i&gt;</code>, <code>&lt;code&gt;</code>.\n\nType /cancel to abort.`, { parse_mode: "HTML" });
+      return;
+    }
+
+    if (data.startsWith("ann_edit_photo:")) {
+      if (!isStartingAdmin(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      const annId = data.substring("ann_edit_photo:".length);
+      
+      userStates.set(userId, { step: "waiting_for_ann_photo", editingKey: annId });
+      await bot.sendMessage(chatId, `🖼️ <b>Edit Announcement Photo:</b>\n\nPlease <b>upload/send a photo directly</b> in this chat, or send an image URL (or type <code>none</code> to remove photo):\n\nType /cancel to abort.`, { parse_mode: "HTML" });
+      return;
+    }
+
+    if (data.startsWith("ann_send_single:")) {
+      if (!isStartingAdmin(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      const annId = data.substring("ann_send_single:".length);
+      await bot.answerCallbackQuery(query.id, { text: "⏳ Sending announcement..." });
+      
+      const anns = loadAnnouncements();
+      const ann = anns.find(a => a.id === annId);
+      if (ann) {
+        try {
+          let messageText = ann.text;
+          let photo = ann.photoUrl;
+          
+          if (ann.type === "vip_slots") {
+            const vipGrandSlots = formatEmojiNumbers(generateSlotNumbers(100));
+            const miniVipSlots = formatEmojiNumbers(generateSlotNumbers(50));
+            const fastSlots = formatEmojiNumbers(generateSlotNumbers(20));
+            
+            messageText = `🎲 <b>የተቀሩ ያልተያዙ ቦታዎች (Remaining Slots)</b> 🎲\n\n` +
+              `🔥 <b>ዕድል 100 ሰው ቀሪ ቁጥሮች:</b> ${vipGrandSlots} ቶሎ ብለው ቁጥር ሳያልቅ ያዝ ያዝ ያድርጉ እና ያሸንፉ፤ ይደሰቱ 🥰\n\n` +
+              `💥 <b>ዕድል 50 ሰው ቀሪ ቁጥሮች:</b> ${miniVipSlots} ቶሎ ብለው ቁጥር ሳያልቅ ያዝ ያዝ ያድርጉ እና ያሸንፉ፤ ይደሰቱ 🥰\n\n` +
+              `⚡ <b>ፈጣን 20 ሰው ቀሪ ቁጥሮች:</b> ${fastSlots} ቶሎ ብለው ቁጥር ሳያልቅ ያዝ ያዝ ያድርጉ እና ያሸንፉ፤ ይደሰቱ 🥰\n\n` +
+              `<i>አሁኑኑ ይግቡ እና ቦታዎን ያስይዙ!</i>`;
+          } else if (ann.type === "high_withdrawal") {
+            const { data: recentWd } = await supabase
+              .from('transactions')
+              .select('amount, created_at, users(username, first_name)')
+              .eq('type', 'withdraw')
+              .gte('amount', 20000)
+              .order('created_at', { ascending: false })
+              .limit(1);
+
+            if (recentWd && recentWd.length > 0) {
+              const rawUser: any = recentWd[0].users;
+              const user = Array.isArray(rawUser) ? rawUser[0] : rawUser;
+              const name = (user && (user.username || user.first_name)) ? (user.username || user.first_name) : 'Anonymous';
+              messageText = `💸 <b>Massive Withdrawal Alert!</b> 💸\n\n` +
+                `🎉 Congratulations to <b>${name}</b> for withdrawing <b>${recentWd[0].amount.toLocaleString()} ETB</b>!\n\n` +
+                `🚀 Play now, win big, and get paid instantly.\n\n` +
+                `<i>Real winners, real money! See the screenshot proof.</i>`;
+              photo = "https://images.unsplash.com/photo-1526304640581-d334cdbbf45e?w=800";
+            } else {
+              messageText = `💸 <b>Massive Withdrawal Alert!</b> 💸\n\n` +
+                `🎉 Congratulations to <b>User_***</b> for withdrawing <b>25,000 ETB</b>!\n\n` +
+                `🚀 Play now, win big, and get paid instantly.\n\n` +
+                `<i>Real winners, real money! See the screenshot proof.</i>`;
+              photo = "https://images.unsplash.com/photo-1526304640581-d334cdbbf45e?w=800";
+            }
+          } else if (ann.type === "high_deposit") {
+            messageText = `💰 <b>Whale Deposit Alert!</b> 💰\n\n` +
+              `🔥 A user just deposited <b>50,000+ ETB</b> to dominate the VIP rooms!\n\n` +
+              `🏆 Are you ready to challenge them?\n\n` +
+              `<i>Join the action now!</i>`;
+            photo = "https://images.unsplash.com/photo-1579621970563-ebec7560ff3e?w=800";
+          } else if (ann.type === "weekly_promoter") {
+            messageText = `🏆 <b>Weekly Promoter Affiliate Winners!</b> 🏆\n\n` +
+              `🥇 <b>1st Place:</b> Received <b>15,000 ETB</b>\n` +
+              `🥈 <b>2nd Place:</b> Received <b>8,000 ETB</b>\n` +
+              `🥉 <b>3rd Place:</b> Received <b>4,000 ETB</b>\n\n` +
+              `🤝 <i>Start referring your friends using /referral and earn your share of the weekly jackpot!</i>`;
+            photo = "https://images.unsplash.com/photo-1513151233558-d860c5398176?w=800";
+          } else if (ann.type === "join_play") {
+            const vipGrandSlots = formatEmojiNumbers(generateSlotNumbers(100).slice(0, 5));
+            const miniVipSlots = formatEmojiNumbers(generateSlotNumbers(50).slice(0, 5));
+            const fastSlots = formatEmojiNumbers(generateSlotNumbers(20).slice(0, 5));
+
+            messageText = `🎮 <b>Scheduled Match Starting Soon!</b> 🎮\n\n` +
+              `⏳ <b>Games available:</b>\n\n` +
+              `🔥 <b>ዕድል 100 ሰው ቀሪ ቁጥሮች:</b> ${vipGrandSlots} ቶሎ ብለው ቁጥር ሳያልቅ ያዝ ያዝ ያድርጉ እና ያሸንፉ፤ ይደሰቱ 🥰\n\n` +
+              `💥 <b>ዕድል 50 ሰው ቀሪ ቁጥሮች:</b> ${miniVipSlots} ቶሎ ብለው ቁጥር ሳያልቅ ያዝ ያዝ ያድርጉ እና ያሸንፉ፤ ይደሰቱ 🥰\n\n` +
+              `⚡ <b>ፈጣን 20 ሰው ቀሪ ቁጥሮች:</b> ${fastSlots} ቶሎ ብለው ቁጥር ሳያልቅ ያዝ ያዝ ያድርጉ እና ያሸንፉ፤ ይደሰቱ 🥰\n\n` +
+              `⚡ <i>Don't miss the next round! Log in to the Mini App and place your bets!</i>`;
+          }
+
+          if (photo) {
+            await downloadAndSendPhoto(bot, process.env.CHANNEL_ID!, photo, { caption: messageText, parse_mode: "HTML" });
+          } else {
+            await bot.sendMessage(process.env.CHANNEL_ID, messageText, { parse_mode: "HTML" });
+          }
+
+          ann.lastRunTime = Date.now();
+          saveAnnouncements(anns);
+
+          await bot.sendMessage(chatId, `✅ Announcement <code>${annId}</code> successfully sent to the channel!`, { parse_mode: "HTML" });
+          await renderAnnouncementDetail(chatId, annId, messageId);
+        } catch (err: any) {
+          logBot(`Failed to manually send single announcement ${annId}: ${err.message}`);
+          await bot.sendMessage(chatId, `❌ Failed to send announcement: ${err.message}`);
+        }
+      } else {
+        await bot.answerCallbackQuery(query.id, { text: "❌ Announcement not found." });
+      }
+      return;
+    }
+
+    if (data.startsWith("ann_delete_conf:")) {
+      if (!isStartingAdmin(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      const annId = data.substring("ann_delete_conf:".length);
+      const text = `⚠️ <b>Delete Announcement Confirmation:</b>\n\nAre you absolutely sure you want to delete <code>${annId}</code>?\nThis action is permanent and cannot be undone.`;
+      
+      const keyboard = {
+        inline_keyboard: [
+          [
+            { text: "🛑 Yes, Delete", callback_data: `ann_delete_exec:${annId}` },
+            { text: "🔙 No, Keep It", callback_data: `ann_view:${annId}` }
+          ]
+        ]
+      };
+
+      if (messageId) {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard });
+      }
+      return;
+    }
+
+    if (data.startsWith("ann_delete_exec:")) {
+      if (!isStartingAdmin(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      const annId = data.substring("ann_delete_exec:".length);
+      const anns = loadAnnouncements();
+      const filtered = anns.filter(a => a.id !== annId);
+      if (filtered.length < anns.length) {
+        saveAnnouncements(filtered);
+        await bot.answerCallbackQuery(query.id, { text: `Announcement ${annId} deleted ✅` });
+        await renderAnnouncementsDashboard(chatId, messageId);
+      } else {
+        await bot.answerCallbackQuery(query.id, { text: "❌ Announcement not found." });
+      }
+      return;
+    }
+
+    if (data === "ann_create_start") {
+      if (!isStartingAdmin(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      const text = `➕ <b>Create Custom Announcement:</b>\n\nPlease select the type/category of the announcement:`;
+      const keyboard = {
+        inline_keyboard: [
+          [
+            { text: "🎉 Promotion", callback_data: "ann_create_type:promotion" },
+            { text: "🏆 Event", callback_data: "ann_create_type:event" },
+            { text: "📚 Guide", callback_data: "ann_create_type:guide" }
+          ],
+          [{ text: "🔙 Cancel", callback_data: "control_announcements" }]
+        ]
+      };
+      if (messageId) {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard });
+      }
+      return;
+    }
+
+    if (data.startsWith("ann_create_type:")) {
+      if (!isStartingAdmin(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      const type = data.substring("ann_create_type:".length);
+      
+      userStates.set(userId, { step: "waiting_for_ann_create_id", field: type });
+      await bot.sendMessage(chatId, `⌨️ <b>Step 1/4: Unique ID</b>\n\nPlease send a unique **ID** for this new announcement (alphanumeric, lowercase, underscores only, e.g., <code>special_discount_week</code>):\n\nType /cancel to abort.`, { parse_mode: "HTML" });
       return;
     }
 
@@ -6554,6 +7395,14 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
         bot.answerCallbackQuery(query.id, { text: "⚠️ Error processing withdrawal refund." });
       }
       return;
+    }
+    } catch (globalErr: any) {
+      logBot(`[Callback Query ERROR] Unexpected dispatcher error: ${globalErr.message || globalErr}`);
+      try {
+        await bot.answerCallbackQuery(query.id, { text: "⚠️ An error occurred in the bot. Please try again." });
+      } catch (err) {
+        console.error("Failed to answer callback query after exception:", err);
+      }
     }
   });
 

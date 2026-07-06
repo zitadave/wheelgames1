@@ -18,7 +18,7 @@ async function startServer() {
   app.set('trust proxy', 1);
   app.use(cors());
   app.use(express.json());
-  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+  const PORT = 3000;
   
   const httpServer = createServer(app);
   const io = new Server(httpServer, {
@@ -31,8 +31,10 @@ async function startServer() {
   // Initialize Game Engine with Socket.IO
   initGameEngine(io);
   
-  // Initialize Telegram Bot
-  await initTelegramBot(io);
+  // Initialize Telegram Bot in the background (non-blocking)
+  initTelegramBot(io).catch(err => {
+    console.error("Failed to initialize Telegram Bot in background:", err);
+  });
 
   // API routes
   app.get("/api/health", (req, res) => {
@@ -136,6 +138,9 @@ async function startServer() {
       res.status(500).json({ error: err.message });
     }
   });
+
+  // Serve uploaded announcement photos statically
+  app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {

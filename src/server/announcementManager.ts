@@ -56,6 +56,56 @@ export function formatEmojiNumbers(nums: number[]): string {
   return nums.map(n => n.toString().split('').map(digit => emojiMap[digit]).join('')).join(' ');
 }
 
+export async function downloadAndSendPhoto(bot: any, chatId: string | number, photoUrl: string, options: any) {
+  if (!photoUrl) {
+    return;
+  }
+
+  if (!photoUrl.startsWith("http")) {
+    const fullPath = path.isAbsolute(photoUrl) ? photoUrl : path.join(process.cwd(), photoUrl);
+    if (fs.existsSync(fullPath)) {
+      logBot(`Sending local photo file: ${fullPath} to ${chatId}`);
+      await bot.sendPhoto(chatId, photoUrl, options);
+    } else {
+      logBot(`Warning: Local photo file does not exist at: ${fullPath}. Falling back to sending message text only.`);
+      const textOptions = {
+        parse_mode: options.parse_mode || "HTML",
+        reply_markup: options.reply_markup
+      };
+      const text = options.caption || "";
+      if (text) {
+        await bot.sendMessage(chatId, text, textOptions);
+      }
+    }
+    return;
+  }
+
+  try {
+    logBot(`Downloading photo for ${chatId} from: ${photoUrl}`);
+    const res = await fetch(photoUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      }
+    });
+
+    if (!res.ok) {
+      throw new Error(`HTTP status code ${res.status}`);
+    }
+
+    const arrayBuffer = await res.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    await bot.sendPhoto(chatId, buffer, options, {
+      filename: "photo.jpg",
+      contentType: "image/jpeg"
+    });
+    logBot(`Successfully sent photo as buffer to ${chatId}`);
+  } catch (err: any) {
+    logBot(`Failed to download & send photo as buffer (URL: ${photoUrl}): ${err.message}. Retrying sending directly via URL...`);
+    await bot.sendPhoto(chatId, photoUrl, options);
+  }
+}
+
 export async function processAnnouncements(bot: any) {
   const announcements = loadAnnouncements();
   const now = Date.now();
@@ -95,20 +145,21 @@ export async function processAnnouncements(bot: any) {
           .limit(1);
 
         if (data && data.length > 0) {
-          const user = data[0].users;
+          const rawUser: any = data[0].users;
+          const user = Array.isArray(rawUser) ? rawUser[0] : rawUser;
           const name = (user && (user.username || user.first_name)) ? (user.username || user.first_name) : 'Anonymous';
           messageText = `💸 <b>Massive Withdrawal Alert!</b> 💸\n\n` +
             `🎉 Congratulations to <b>${name}</b> for withdrawing <b>${data[0].amount.toLocaleString()} ETB</b>!\n\n` +
             `🚀 Play now, win big, and get paid instantly.\n\n` +
             `<i>Real winners, real money! See the screenshot proof.</i>`;
-          photo = "https://images.unsplash.com/photo-1580519542036-ed47f3e42d1d?w=800"; // Fake receipt photo
+          photo = "https://images.unsplash.com/photo-1526304640581-d334cdbbf45e?w=800"; // Fake receipt photo
         } else {
           // Fallback dummy
           messageText = `💸 <b>Massive Withdrawal Alert!</b> 💸\n\n` +
             `🎉 Congratulations to <b>User_***</b> for withdrawing <b>25,000 ETB</b>!\n\n` +
             `🚀 Play now, win big, and get paid instantly.\n\n` +
             `<i>Real winners, real money! See the screenshot proof.</i>`;
-          photo = "https://images.unsplash.com/photo-1580519542036-ed47f3e42d1d?w=800";
+          photo = "https://images.unsplash.com/photo-1526304640581-d334cdbbf45e?w=800";
         }
       } else if (ann.type === "high_deposit") {
         // High deposit > 50000
@@ -116,14 +167,14 @@ export async function processAnnouncements(bot: any) {
           `🔥 A user just deposited <b>50,000+ ETB</b> to dominate the VIP rooms!\n\n` +
           `🏆 Are you ready to challenge them?\n\n` +
           `<i>Join the action now!</i>`;
-        photo = "https://images.unsplash.com/photo-1621416894559-258a156db743?w=800";
+        photo = "https://images.unsplash.com/photo-1579621970563-ebec7560ff3e?w=800";
       } else if (ann.type === "weekly_promoter") {
         messageText = `🏆 <b>Weekly Promoter Affiliate Winners!</b> 🏆\n\n` +
           `🥇 <b>1st Place:</b> Received <b>15,000 ETB</b>\n` +
           `🥈 <b>2nd Place:</b> Received <b>8,000 ETB</b>\n` +
           `🥉 <b>3rd Place:</b> Received <b>4,000 ETB</b>\n\n` +
           `🤝 <i>Start referring your friends using /referral and earn your share of the weekly jackpot!</i>`;
-        photo = "https://images.unsplash.com/photo-1579621970588-a35d0e7ab9b6?w=800"; // Trophies/Money
+        photo = "https://images.unsplash.com/photo-1513151233558-d860c5398176?w=800"; // Trophies/Money/Celebration
       } else if (ann.type === "join_play") {
         const vipGrandSlots = formatEmojiNumbers(generateSlotNumbers(100).slice(0, 5));
         const miniVipSlots = formatEmojiNumbers(generateSlotNumbers(50).slice(0, 5));
@@ -139,7 +190,7 @@ export async function processAnnouncements(bot: any) {
 
       try {
         if (photo) {
-          await bot.sendPhoto(process.env.CHANNEL_ID, photo, {
+          await downloadAndSendPhoto(bot, process.env.CHANNEL_ID!, photo, {
             caption: messageText,
             parse_mode: "HTML"
           });

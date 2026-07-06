@@ -804,7 +804,7 @@ export function initGameEngine(io: Server) {
 
     socket.on("grid_join", (roomName: string) => {
       socket.join(roomName);
-      if (!gridRooms[roomName]) gridRooms[roomName] = { claimedSlots: {}, roundId: 1 };
+      if (!gridRooms[roomName]) gridRooms[roomName] = { claimedSlots: {}, roundId: 1, history: [] };
       socket.emit("grid_state", gridRooms[roomName]);
     });
 

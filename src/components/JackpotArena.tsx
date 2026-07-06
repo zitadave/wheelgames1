@@ -709,7 +709,7 @@ export const JackpotArena = React.memo(function JackpotArena({
                 : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 hover:dark:text-gray-200'
             } disabled:opacity-50 disabled:cursor-not-allowed`}
           >
-            <Zap className="w-3.5 h-3.5 text-amber-500" /> Mini-VIP (1-50)
+            <Zap className="w-3.5 h-3.5 text-amber-500" /> VIP - 50 ሰው
           </button>
           <button
             onClick={() => gamePhase === 'lobby' && setTier('grand')}
@@ -720,7 +720,7 @@ export const JackpotArena = React.memo(function JackpotArena({
                 : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 hover:dark:text-gray-200'
             } disabled:opacity-50 disabled:cursor-not-allowed`}
           >
-            <Crown className="w-3.5 h-3.5 text-yellow-500" /> VIP Grand (1-100)
+            <Crown className="w-3.5 h-3.5 text-yellow-500" /> VIP - 100 ሰው
           </button>
         </div>
         </>
@@ -770,7 +770,7 @@ export const JackpotArena = React.memo(function JackpotArena({
               <div className="flex flex-col items-center justify-center mb-3">
                 <div className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 border border-amber-500/30 text-amber-500 rounded-full text-xs font-black uppercase tracking-wider animate-pulse">
                   <Zap className="w-3.5 h-3.5 fill-amber-500/20 text-amber-500 animate-bounce" />
-                  <span>Mini-VIP</span>
+                  <span>VIP - 50 ሰው</span>
                 </div>
               </div>
               <div className="mt-2 text-xs font-bold text-amber-400/80 bg-amber-500/5 border border-amber-500/10 px-4 py-1.5 rounded-full uppercase tracking-wider animate-pulse">

@@ -3,7 +3,7 @@
   "deposit_success_msg": "✅ *Your deposit Request have been sent to admins please wait 1 min.*",
   "deposit_approved_msg": "✅ *Your deposit of {amount} ETB is confirmed.*\n🧾 *Ref:* `{ref}`",
   "deposit_declined_msg": "❌ *Your deposit of {amount} ETB is Declined.*",
-  "support_text": "ሚያጋጥማቹ የክፍያ ችግር:\n@wheelgamessupport\n@wheelgamesupport1 ላይ ፃፉልን።",
+  "support_text": "ሚያጋጥማቹ የክፍያ ችግር:\n@scofiled1 ላይ ፃፉልን።",
   "withdraw_start_msg": "💰 *ማውጣት የሚፈልጉትን የገንዘብ መጠን ያስገቡ ?*\n\n💳 *የእርስዎ ባላንስ:* `{balance} ETB`\n\n_(Please type the amount you want to withdraw):_",
   "withdraw_telebirr_prompt": "📱 *እባክዎን ስልክ ቁጥርን ያስገቡ:*",
   "withdraw_other_bank_prompt": "🏦 *እባክዎን አካውንት ቁጥርን ያስገቡ:*",
@@ -14,7 +14,7 @@
   "welcome_image": "",
   "welcome_guest_msg": "🎮 <b>Welcome to ETB Game Hub!</b> 🚀\n\nExperience the ultimate Telegram gaming destination! Test your prediction skills with 🟢 <b>Even/Odd</b>, enter the 🏆 <b>Jackpot Arena</b>, or spin the 🎡 <b>Wheel of Chance</b> to win incredible rewards.\n\n💎 <i>Play instantly, win with real-time multipliers, and withdraw directly to your favorite wallet!</i>",
   "welcome_guest_image": "",
-  "support_card_msg": "📞 *Contact Support*\n\n📱 *Phone:* `+251-931-50-35-59`\n📧 *Email:* `support@wheelgame.et`\n💬 *Telegram:* @wheelgame_support\n\n⏰ *Support Hours:*\nMonday - Sunday: 9 AM - 9 PM\n\nWe're here to help!",
+  "support_card_msg": "📞 <b>Contact Support</b>\n\n📱 <b>Phone:</b> <code>+251-931-50-35-59</code>\n📧 <b>Email:</b> <code>support@wheelgame.et</code>\n💬 <b>Telegram:</b> @scofiled1\n\n⏰ <b>Support Hours:</b>\nMonday - Sunday: 9 AM - 9 PM\n\nWe're here to help!",
   "welcome_buttons": [
     [
       {

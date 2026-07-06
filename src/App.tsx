@@ -417,7 +417,9 @@ export default function App() {
     });
 
     socket.on('userGameLogs', (data: any[]) => {
-      const formatted = data.map(log => {
+      // Ensure we only show logs for the current user, just in case the server sends more
+      const userLogs = data.filter(log => log.user_id === userId);
+      const formatted = userLogs.map(log => {
         let rawType = log.game_type || '';
         let gameType = rawType;
         let roundId = log.id.slice(0, 8).toUpperCase();
@@ -1036,66 +1038,75 @@ export default function App() {
             {/* TAB 4: Profile Page */}
             <div className={`flex-1 p-4 space-y-4 ${activeTab === 'profile' ? 'block' : 'hidden'}`}>
                 {/* User Info Card */}
-                <div className="bg-white dark:bg-gray-900 rounded-2xl p-4 border border-gray-200 dark:border-gray-800 transition-colors text-center shadow-xs">
-                  <div className="relative mx-auto w-16 h-16 rounded-full bg-blue-600 flex items-center justify-center font-bold text-2xl text-white shadow-md overflow-hidden">
-                    {photoUrl ? (
-                      <img src={photoUrl} alt="Avatar" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                    ) : (
-                      username.charAt(0).toUpperCase()
-                    )}
-                    <div className="absolute -bottom-1 -right-1 bg-green-500 w-4 h-4 rounded-full border-2 border-white dark:border-gray-900 z-10" />
+                <div className="relative overflow-hidden bg-gradient-to-br from-blue-600 to-blue-800 rounded-3xl p-6 text-center shadow-lg shadow-blue-500/20">
+                  <div className="absolute top-0 right-0 p-4 opacity-10">
+                     <div className="w-24 h-24 bg-white rounded-full blur-2xl"></div>
                   </div>
-                  <h2 className="text-base font-black text-gray-900 dark:text-white mt-3">
+                  <div className="relative mx-auto w-20 h-20 rounded-full bg-white/20 p-1 flex items-center justify-center shadow-inner backdrop-blur-sm">
+                    {photoUrl ? (
+                      <img src={photoUrl} alt="Avatar" className="w-full h-full object-cover rounded-full" referrerPolicy="no-referrer" />
+                    ) : (
+                      <span className="text-3xl font-black text-white">{username.charAt(0).toUpperCase()}</span>
+                    )}
+                    <div className="absolute bottom-1 right-1 bg-green-400 w-5 h-5 rounded-full border-4 border-blue-700 z-10" />
+                  </div>
+                  <h2 className="text-xl font-black text-white mt-4">
                     {firstName || lastName ? `${firstName} ${lastName}`.trim() : username}
                   </h2>
                   
                   {/* Account id and quick copy button */}
-                  <div className="flex items-center justify-center gap-1.5 mt-1">
-                    <span className="text-[10px] font-bold text-gray-400 font-mono">ID: {userId.slice(5, 18).toUpperCase()}</span>
+                  <div className="flex items-center justify-center gap-2 mt-2 bg-black/20 rounded-full py-1 px-3 mx-auto w-fit">
+                    <span className="text-[10px] font-bold text-blue-100 font-mono tracking-wide">ID: {userId.slice(5, 18).toUpperCase()}</span>
                     <button
                       onClick={() => {
                         navigator.clipboard.writeText(userId);
                         setCopiedId(true);
                         setTimeout(() => setCopiedId(false), 2000);
                       }}
-                      className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded transition-colors text-gray-400 hover:text-gray-600"
+                      className="p-1 hover:bg-white/20 rounded-full transition-colors text-blue-200 hover:text-white"
                     >
-                      {copiedId ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
+                      {copiedId ? <Check className="w-3 h-3 text-green-300" /> : <Copy className="w-3 h-3" />}
                     </button>
                   </div>
                 </div>
 
                 {/* Affiliate & Earnings Dashboard */}
-                <div className="bg-white dark:bg-gray-900 rounded-2xl p-4 border border-gray-200 dark:border-gray-800 transition-colors shadow-xs space-y-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-[10px] font-black uppercase text-gray-400 tracking-widest">Passive Income</h3>
-                    <Users className="w-3.5 h-3.5 text-blue-500" />
+                <div className="bg-white dark:bg-gray-900 rounded-3xl p-6 border border-gray-100 dark:border-gray-800 shadow-sm transition-colors space-y-5">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-[11px] font-black uppercase text-gray-400 tracking-widest flex items-center gap-2">
+                        <Users className="w-4 h-4 text-blue-500" /> Passive Income
+                    </h3>
                   </div>
                   
                   {affiliateStats?.isFlagged && (
-                      <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 p-2 rounded-lg text-xs font-medium flex items-center gap-2">
-                          <AlertCircle className="w-4 h-4 shrink-0" />
+                      <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 p-3 rounded-xl text-xs font-medium flex items-center gap-3">
+                          <AlertCircle className="w-5 h-5 shrink-0" />
                           <span>Account flagged for review. Payouts disabled.</span>
                       </div>
                   )}
                   
-                  <div className="flex items-center justify-between py-1">
-                    <span className="text-xs font-bold text-gray-700 dark:text-gray-300">Total Referrals</span>
-                    <span className="text-xs font-black font-mono text-gray-900 dark:text-white bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-md">
-                      {affiliateStats?.totalReferrals || 0}
-                    </span>
+                  <div className="grid grid-cols-2 gap-4">
+                      <div className="bg-gray-50 dark:bg-gray-800/50 p-4 rounded-2xl">
+                          <div className="text-[10px] font-bold text-gray-500">Total Referrals</div>
+                          <div className="text-xl font-black text-gray-900 dark:text-white mt-1">
+                            {affiliateStats?.totalReferrals || 0}
+                          </div>
+                      </div>
+                      <div className="bg-gray-50 dark:bg-gray-800/50 p-4 rounded-2xl">
+                          <div className="text-[10px] font-bold text-gray-500">Total Earned</div>
+                          <div className="text-xl font-black text-gray-900 dark:text-white mt-1">
+                            {(affiliateStats?.totalEarned || 0).toLocaleString()}
+                          </div>
+                      </div>
                   </div>
-                  <div className="flex items-center justify-between py-1 border-t border-gray-100 dark:border-gray-800/40">
-                    <span className="text-xs font-bold text-gray-700 dark:text-gray-300">Total Earned</span>
-                    <span className="text-xs font-black font-mono text-gray-900 dark:text-white bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-md">
-                      {(affiliateStats?.totalEarned || 0).toLocaleString()} ETB
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between py-1 border-t border-gray-100 dark:border-gray-800/40">
-                    <span className="text-xs font-bold text-gray-700 dark:text-gray-300">Available to Withdraw</span>
-                    <span className="text-xs font-black font-mono text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-2 py-0.5 rounded-md">
-                      {(affiliateStats?.availableBalance || 0).toLocaleString()} ETB
-                    </span>
+
+                  <div className="bg-blue-50 dark:bg-blue-950/20 p-4 rounded-2xl flex items-center justify-between border border-blue-100 dark:border-blue-900/50">
+                    <div>
+                        <div className="text-[10px] font-bold text-blue-600 dark:text-blue-400">Available to Withdraw</div>
+                        <div className="text-2xl font-black text-blue-800 dark:text-blue-200 mt-0.5">
+                           {(affiliateStats?.availableBalance || 0).toLocaleString()} <span className="text-sm">ETB</span>
+                        </div>
+                    </div>
                   </div>
                   
                   <button
@@ -1115,12 +1126,12 @@ export default function App() {
                         }
                     }}
                     disabled={affiliateStats?.isFlagged || (affiliateStats?.availableBalance || 0) < 1000}
-                    className="w-full mt-2 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-gray-900 dark:text-white text-xs font-bold py-2 rounded-xl transition-colors"
+                    className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-bold py-3 rounded-2xl transition-all active:scale-95 shadow-md shadow-blue-500/20"
                   >
                     Request Payout (Min 1,000)
                   </button>
                   
-                  <p className="text-[10px] text-gray-500 dark:text-gray-400 leading-tight mt-1">
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-relaxed pt-2 border-t border-gray-100 dark:border-gray-800">
                     Invite friends using your link in Telegram to earn <b>1% commission</b> on all their bets. Minimum payout is 1,000 ETB. Subject to manual review.
                   </p>
                 </div>
@@ -1399,8 +1410,8 @@ export default function App() {
                   const getGameBadgeName = (type: string): string => {
                     const t = type.toLowerCase();
                     if (t === 'even/odd' || t.includes('even/odd')) return 'ሞላ/ጎደለ';
-                    if (t === 'chance 1-10' || t.includes('1-10')) return 'ፈጣን (1-10)';
-                    if (t === 'chance 1-20' || t.includes('1-20')) return 'ፈጣን (1-20)';
+                    if (t === 'chance 1-10' || t.includes('1-10')) return 'ፈጣን 10 ሰው';
+                    if (t === 'chance 1-20' || t.includes('1-20')) return 'ፈጣን 20 ሰው';
                     if (t === 'jackpot mini' || (t.includes('jackpot') && t.includes('mini'))) return 'ዕድል (1-50)';
                     if (t === 'jackpot grand' || (t.includes('jackpot') && t.includes('grand'))) return 'ዕድል (1-100)';
                     return type;
@@ -1516,8 +1527,8 @@ export default function App() {
                           >
                             <option value="all">ሁሉም ጨዋታዎች (All Games)</option>
                             <option value="even_odd">🟢 ሞላ/ጎደለ (Even/Odd)</option>
-                            <option value="wheel_1_10">🎡 ፈጣን (1-10)</option>
-                            <option value="wheel_1_20">🎡 ፈጣን (1-20)</option>
+                            <option value="wheel_1_10">🎡 ፈጣን 10 ሰው</option>
+                            <option value="wheel_1_20">🎡 ፈጣን 20 ሰው</option>
                             <option value="jackpot_mini">🏆 ዕድል (1-50)</option>
                             <option value="jackpot_grand">🏆 ዕድል (1-100)</option>
                           </select>

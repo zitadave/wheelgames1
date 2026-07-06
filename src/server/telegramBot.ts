@@ -6,7 +6,7 @@ import { Server } from "socket.io";
 import { fetchLeaderboardData, getStartOfWeekUTC } from "./leaderboardHelper.js";
 import * as fs from "fs";
 import * as path from "path";
-import nodemailer from "nodemailer";
+import { handleSupportChat } from "./aiSupport.js";
 
 let botInfo: any = null;
 let botInstance: any = null;
@@ -50,6 +50,8 @@ interface UserState {
   cmd_desc?: string;
   field?: string;
   editingPromptId?: string;
+  isSupportAI?: boolean;
+  aiHistory?: any;
 }
 
 const userStates = new Map<string, UserState>();
@@ -290,7 +292,7 @@ const DEFAULT_PROMPTS_CONFIG: PromptsConfig = {
   welcome_image: "",
   welcome_guest_msg: "🎮 <b>Welcome to ETB Game Hub!</b> 🚀\n\nExperience the ultimate Telegram gaming destination! Test your prediction skills with 🟢 <b>Even/Odd</b>, enter the 🏆 <b>Jackpot Arena</b>, or spin the 🎡 <b>Wheel of Chance</b> to win incredible rewards.\n\n💎 <i>Play instantly, win with real-time multipliers, and withdraw directly to your favorite wallet!</i>",
   welcome_guest_image: "",
-  support_card_msg: "📞 *Contact Support*\n\n📱 *Phone:* `+251-931-50-35-59`\n📧 *Email:* `support@wheelgame.et`\n💬 *Telegram:* @wheelgame_support\n\n⏰ *Support Hours:*\nMonday - Sunday: 9 AM - 9 PM\n\nWe're here to help!",
+  support_card_msg: "📞 *Contact Support*\n\n📱 *Phone:* `+251-931-50-35-59`\n📧 *Email:* `support@wheelgame.et`\n💬 *Telegram:* @scofiled1\n\n⏰ *Support Hours:*\nMonday - Sunday: 9 AM - 9 PM\n\nWe're here to help!",
 
   welcome_buttons: [
     [
@@ -377,44 +379,6 @@ function savePromptsConfig(config: PromptsConfig) {
 
 // Load dynamic prompts config
 promptsConfig = loadPromptsConfig();
-
-async function sendPasswordEmail(password: string): Promise<boolean> {
-  try {
-    const host = process.env.SMTP_HOST || "smtp.gmail.com";
-    const port = parseInt(process.env.SMTP_PORT || "587", 10);
-    const user = process.env.SMTP_USER;
-    const pass = process.env.SMTP_PASS;
-
-    if (!user || !pass) {
-      logBot(`SMTP credentials missing (SMTP_USER/SMTP_PASS). Cannot send real email to tamirud8@gmail.com. Password is: ${password}`);
-      return false;
-    }
-
-    const transporter = nodemailer.createTransport({
-      host,
-      port,
-      secure: port === 465,
-      auth: {
-        user,
-        pass,
-      },
-    });
-
-    await transporter.sendMail({
-      from: `"Telegram Bot Admin" <${user}>`,
-      to: "tamirud8@gmail.com",
-      subject: "Telegram Bot Admin Password Recovery",
-      text: `Hello,\n\nYour Telegram Bot Owner Admin Password is: ${password}\n\nSecurity notice: If you did not request this, please change your password immediately.`,
-      html: `<p>Hello,</p><p>Your Telegram Bot Owner Admin Password is: <strong>${password}</strong></p><p><em>Security notice: If you did not request this, please change your password immediately.</em></p>`,
-    });
-
-    logBot(`Admin password sent successfully to tamirud8@gmail.com via SMTP.`);
-    return true;
-  } catch (error: any) {
-    logBot(`Error sending password email to tamirud8@gmail.com: ${error.message}`);
-    return false;
-  }
-}
 
 // In-memory pending requests store
 interface PendingRequest {
@@ -572,6 +536,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       { command: "withdraw", description: "Withdraw ETB from your balance" },
       { command: "referral", description: "Invite friends and earn rewards" },
       { command: "affiliate", description: "View your affiliate dashboard and earnings" },
+      { command: "promoter_leaderboard", description: "View Weekly Promoter Leaderboard" },
       { command: "support", description: "Show contact support details" },
       { command: "language", description: "Change bot language" },
       { command: "cancel", description: "Cancel current operation or active flows" }
@@ -582,7 +547,12 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       description: cfg.description || "Custom command"
     }));
 
-    await bot.setMyCommands([...systemCommands, ...customCommandsList]);
+    try {
+      await bot.setMyCommands([...systemCommands, ...customCommandsList]);
+      logBot("Bot commands updated successfully.");
+    } catch (cmdErr: any) {
+      logBot(`Error setting bot commands: ${cmdErr.message}`);
+    }
 
     // Update main bot menu button to open the Web App
     try {
@@ -696,15 +666,16 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
   const sendSupportCard = (chatId: number) => {
     logBot(`sendSupportCard triggered for chatId=${chatId}`);
     try {
-      const supportCard = `📞 *Contact Support*\n\n` +
-        `📱 *Phone:* \`+251-931-50-35-59\`\n` +
-        `📧 *Email:* \`support@wheelgame.et\`\n` +
-        `💬 *Telegram:* @wheelgame_support\n\n` +
-        `⏰ *Support Hours:*\n` +
+      const supportCard = promptsConfig.support_card_msg || 
+        `📞 <b>Contact Support</b>\n\n` +
+        `📱 <b>Phone:</b> <code>+251-931-50-35-59</code>\n` +
+        `📧 <b>Email:</b> <code>support@wheelgame.et</code>\n` +
+        `💬 <b>Telegram:</b> @scofiled1\n\n` +
+        `⏰ <b>Support Hours:</b>\n` +
         `Monday - Sunday: 9 AM - 9 PM\n\n` +
         `We're here to help!`;
 
-      bot.sendMessage(chatId, supportCard, { parse_mode: "Markdown" });
+      bot.sendMessage(chatId, supportCard, { parse_mode: "HTML" });
       logBot(`sendSupportCard message sent successfully to chatId=${chatId}`);
     } catch (e: any) {
       logBot(`Error in sendSupportCard: ${e?.message || e}`);
@@ -742,7 +713,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
     }
   };
 
-  registerCommandHandlers(bot, logBot, checkRegisteredAndHandle, sendSupportCard);
+  registerCommandHandlers(bot, logBot, checkRegisteredAndHandle, sendSupportCard, userStates);
 
   // --- BOT COMMANDS HANDLERS ---
   
@@ -1012,6 +983,46 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
     });
   });
 
+  bot.onText(/\/promoter_leaderboard/, async (msg) => {
+    await checkRegisteredAndHandle(msg, async () => {
+      const chatId = msg.chat.id;
+      try {
+        const stats = await fetchLeaderboardData();
+        const dateStr = new Date(stats.startOfWeek).toLocaleDateString('en-US', { day: '2-digit', month: '2-digit', year: 'numeric' });
+        
+        let text = `🏆 <b>Weekly Promoter Leaderboard</b>\n\n`;
+        text += `📅 <b>Week of:</b> <code>${dateStr}</code> (Sunday UTC)\n`;
+        text += `💰 <b>Weekly Promoter Jackpot:</b> <b>${stats.promoterJackpot.toLocaleString()} ETB</b>\n`;
+        text += `<i>Funded by 10% of the platform's retained fees from Jackpot and Chance 1-20 rooms this week!</i>\n\n`;
+        
+        text += `👥 <b>Top 10 Active Promoters:</b>\n`;
+        if (stats.leaderboard && stats.leaderboard.length > 0) {
+            stats.leaderboard.forEach((entry, idx) => {
+                const name = entry.first_name || entry.username || `User ${entry.referrer_id.slice(0, 6)}`;
+                const medal = idx === 0 ? "🥇" : idx === 1 ? "🥈" : idx === 2 ? "🥉" : "•";
+                
+                // Estimate split for top 3
+                let estText = "";
+                if (idx === 0) estText = ` (Est: <b>${Math.floor(stats.promoterJackpot * 0.50).toLocaleString()} ETB</b>)`;
+                if (idx === 1) estText = ` (Est: <b>${Math.floor(stats.promoterJackpot * 0.30).toLocaleString()} ETB</b>)`;
+                if (idx === 2) estText = ` (Est: <b>${Math.floor(stats.promoterJackpot * 0.20).toLocaleString()} ETB</b>)`;
+                
+                text += `${medal} <b>${name}</b> | Vol: <code>${entry.volume.toLocaleString()} ETB</code>${estText}\n`;
+            });
+        } else {
+            text += `<i>No referred playing volume yet for this week. Be the first to claim a spot!</i>\n`;
+        }
+        
+        text += `\n📢 <i>Share your referral link using /referral to invite friends. The more they bet in ዕድል (Jackpot) and ፈጣን (1-20) rooms, the higher your volume and share of the weekly jackpot!</i>`;
+        
+        bot.sendMessage(chatId, text, { parse_mode: "HTML" });
+      } catch (e: any) {
+        logBot(`Error displaying promoter leaderboard: ${e.message}`);
+        bot.sendMessage(chatId, `❌ Error loading leaderboard: ${e.message}`);
+      }
+    });
+  });
+
   // Cancel flow command
   bot.onText(/\/cancel/, (msg) => {
     const userId = msg.from?.id;
@@ -1102,8 +1113,142 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
           { text: "🤖 Auto Campaigns", callback_data: "control_autocamp" }
         ],
         [
+          { text: "🤖 AI Instructions", callback_data: "control_ai_instructions" },
+          { text: "🔍 User Lookup", callback_data: "control_user_lookup" }
+        ],
+        [
           { text: "🤝 Manage Affiliate", callback_data: "control_manage_affiliate" }
         ]
+      ]
+    };
+
+    if (messageId) {
+      bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard })
+        .catch(() => bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: keyboard }));
+    } else {
+      bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: keyboard });
+    }
+  }
+
+  async function renderUserLookupPanel(chatId: number, messageId?: number) {
+    try {
+      let text = "🔍 <b>User Data Lookup</b>\n\n" +
+                 "<b>Send a Telegram ID / @username</b> to search.\n\n" +
+                 "Type /cancel to abort lookup.";
+
+      const buttons = [];
+      buttons.push([{ text: "⌨️ Manual Search", callback_data: "lookup_manual_search" }]);
+      buttons.push([{ text: "⬅️ Back", callback_data: "control_back" }]);
+
+      userStates.set(String(chatId), { step: 'waiting_for_lookup_id' });
+
+      const keyboard = { inline_keyboard: buttons };
+
+      if (messageId) {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard });
+      } else {
+        await bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: keyboard });
+      }
+    } catch (err: any) {
+      logBot(`Error rendering lookup panel: ${err.message}`);
+      await bot.sendMessage(chatId, "❌ Error loading lookup panel.");
+    }
+  }
+
+  async function processUserLookup(chatId: number, targetIdentifier: string) {
+    try {
+      let queryIdentifier = targetIdentifier.trim();
+      let user = null;
+
+      if (queryIdentifier.startsWith('@')) {
+        const username = queryIdentifier.replace('@', '');
+        const { data } = await supabase
+          .from('users')
+          .select('*')
+          .eq('username', username)
+          .single();
+        user = data;
+      } else {
+        const { data } = await supabase
+          .from('users')
+          .select('*')
+          .eq('id', queryIdentifier)
+          .single();
+        user = data;
+      }
+
+      if (!user) {
+        await bot.sendMessage(chatId, `❌ User with ID/Username <code>${targetIdentifier}</code> not found.`, { parse_mode: "HTML" });
+        return;
+      }
+
+      const targetId = user.id;
+
+      const { data: txs } = await supabase.from('transactions').select('amount, type').eq('user_id', targetId);
+      const totalDep = txs?.filter(t => t.type === 'deposit').reduce((s, t) => s + Number(t.amount), 0) || 0;
+      const totalWith = txs?.filter(t => t.type === 'withdraw').reduce((s, t) => s + Number(t.amount), 0) || 0;
+      const totalRewards = txs?.filter(t => t.type === 'reward' || t.type === 'affiliate_withdrawal').reduce((s, t) => s + Number(t.amount), 0) || 0;
+
+      const { data: bets } = await supabase.from('bets').select('amount').eq('user_id', targetId);
+      const { data: logs } = await supabase.from('game_logs').select('win_amount').eq('user_id', targetId);
+      const totalBets = bets?.reduce((s, b) => s + Number(b.amount), 0) || 0;
+      const totalWins = logs?.reduce((s, l) => s + Number(l.win_amount), 0) || 0;
+
+      const { data: referrals } = await supabase.from('users').select('id').eq('referrer_id', targetId);
+
+      let report = `👤 <b>Admin User Report:</b> <code>${targetId}</code>\n` +
+                   `━━━━━━━━━━━━━━━━━━━━\n` +
+                   `👤 <b>Username:</b> @${user.username || 'N/A'}\n` +
+                   `💰 <b>Current Balance:</b> ${user.balance} ETB\n` +
+                   `📅 <b>Joined:</b> ${new Date(user.created_at).toLocaleDateString()}\n` +
+                   `👥 <b>Total Referrals:</b> ${referrals?.length || 0}\n\n` +
+                   `💳 <b>Financials:</b>\n` +
+                   `📥 <b>Total Deposits:</b> ${totalDep} ETB\n` +
+                   `📤 <b>Total Withdraws:</b> ${totalWith} ETB\n` +
+                   `🎁 <b>Total Rewards:</b> ${totalRewards} ETB\n\n` +
+                   `🎮 <b>Gaming Activity:</b>\n` +
+                   `🎰 <b>Even/Odd Wagered:</b> ${totalBets} ETB\n` +
+                   `🏆 <b>Total Game Wins:</b> ${totalWins} ETB\n` +
+                   `━━━━━━━━━━━━━━━━━━━━`;
+
+      userStates.set(String(chatId), { step: 'idle' });
+      await bot.sendMessage(chatId, report, { parse_mode: "HTML" });
+    } catch (err: any) {
+      logBot(`Lookup Error: ${err.message}`);
+      await bot.sendMessage(chatId, "❌ An error occurred during lookup.");
+    }
+  }
+
+  async function renderAIInstructionsPanel(chatId: number, messageId?: number) {
+    let currentInstruction = "<i>Loading...</i>";
+    try {
+      const { data } = await supabase
+        .from('bot_config')
+        .select('value')
+        .eq('key', 'ai_system_instruction')
+        .single();
+      
+      if (data?.value) {
+        currentInstruction = escapeHTML(data.value);
+      } else {
+        currentInstruction = "<i>No custom instructions set. Using default.</i>";
+      }
+    } catch (err) {
+      currentInstruction = "<i>Error loading instructions.</i>";
+    }
+
+    const text = `🤖 <b>AI System Instructions</b>\n\n` +
+                 `These instructions define what the AI knows and how it behaves.\n\n` +
+                 `📜 <b>Current Instruction:</b>\n` +
+                 `----------------------------------------\n` +
+                 `${currentInstruction}\n` +
+                 `----------------------------------------\n\n` +
+                 `👇 Click the button below to update these instructions.`;
+
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: "📝 Edit Instructions", callback_data: "control_ai_edit" }],
+        [{ text: "🔙 Back", callback_data: "control_edit" }]
       ]
     };
 
@@ -1826,6 +1971,31 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
     supabase.from('users').update({ last_seen: new Date().toISOString() }).eq('id', userId).then(({ error }) => { if (error) console.error(error); });
 
     const text = msg.text?.trim() || "";
+    const supportState = userStates.get(userId);
+
+    // AI Support Logic
+    if (supportState?.isSupportAI && text && !text.startsWith("/")) {
+      logBot(`AI Support: Processing message from userId=${userId}`);
+      const isAdmin = isStartingAdmin(parseInt(userId, 10));
+      const aiResult = await handleSupportChat(userId, text, supportState.aiHistory, isAdmin);
+      
+      if (aiResult.escalate) {
+        supportState.isSupportAI = false;
+        supportState.step = 'idle';
+        await bot.sendMessage(chatId, aiResult.text, { parse_mode: "HTML" });
+        
+        // Notify Human Agent
+        const humanAgentId = 336997351;
+        const userInfo = msg.from?.username ? `@${msg.from.username}` : userId;
+        await bot.sendMessage(humanAgentId, `🚨 <b>Support Escalation Required!</b>\n\nUser: ${userInfo}\nID: <code>${userId}</code>\nReason: ${aiResult.reason || "N/A"}\n\nPlease contact them directly.`, { parse_mode: "HTML" });
+        return;
+      }
+
+      supportState.aiHistory = aiResult.interactionId;
+      await bot.sendMessage(chatId, aiResult.text, { parse_mode: "HTML" });
+      return;
+    }
+
     if (text.startsWith("/")) {
       const commandParts = text.slice(1).split(" ");
       let cmdName = commandParts[0].toLowerCase();
@@ -1870,9 +2040,79 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
     }
 
     const numUserId = msg.from?.id;
-
-    // Process admin prompt-editing interactive states
     const editState = userStates.get(userId);
+    logBot(`AI Support: Processing message from userId=${userId}, editState=${JSON.stringify(editState)}`);
+
+    // Process User Lookup
+    if (editState && editState.step === 'waiting_for_lookup_id') {
+      if (!numUserId || !isStartingAdmin(numUserId)) {
+        userStates.set(userId, { step: 'idle' });
+        return;
+      }
+
+      if (text === "/cancel") {
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, "❌ Lookup cancelled.");
+        return;
+      }
+
+      const targetId = text?.trim();
+      if (!targetId) {
+        await bot.sendMessage(chatId, "⚠️ Please send a valid Telegram ID or Username.");
+        return;
+      }
+
+      await processUserLookup(chatId, targetId);
+      return;
+    }
+
+    // Process AI Instructions Editing
+    if (editState && editState.step === 'editing_ai_instructions') {
+      if (!numUserId || !isStartingAdmin(numUserId)) {
+        userStates.set(userId, { step: 'idle' });
+        return;
+      }
+
+      if (text === "/cancel") {
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, "❌ Editing cancelled.");
+        await renderAIInstructionsPanel(chatId);
+        return;
+      }
+
+      try {
+        console.log(`Updating AI instructions in Supabase...`);
+        const { data, error } = await supabase
+          .from('bot_config')
+          .update({ 
+            value: text,
+            updated_at: new Date().toISOString()
+          })
+          .eq('key', 'ai_system_instruction')
+          .select();
+        
+        if (error) {
+            if (error.code === 'PGRST116' || error.message?.includes('bot_config')) {
+                logBot(`Error updating AI instructions: Table 'bot_config' does not exist. Please run the provided SQL schema.`);
+                await bot.sendMessage(chatId, "❌ <b>Database Error:</b> The <code>bot_config</code> table is missing. Please contact the administrator to run the required SQL schema migration.");
+            } else {
+                logBot(`Error updating AI instructions: ${error.message}`);
+                await bot.sendMessage(chatId, `❌ Failed to update instructions: ${error.message}`);
+            }
+        } else {
+            logBot(`AI instructions updated: ${JSON.stringify(data)}`);
+        }
+
+        userStates.set(userId, { step: 'idle' });
+        await bot.sendMessage(chatId, "✅ <b>AI System Instructions Updated Successfully!</b>", { parse_mode: "HTML" });
+        await renderAIInstructionsPanel(chatId);
+      } catch (err: any) {
+        logBot(`Error updating AI instructions: ${err.message}`);
+        await bot.sendMessage(chatId, "❌ Failed to update instructions. Please try again.");
+      }
+      return;
+    }
+
     if (editState && editState.step === 'edit_prompt_value' && editState.editingKey) {
       if (!numUserId || !isStartingAdmin(numUserId)) {
         userStates.set(userId, { step: 'idle' });
@@ -2771,7 +3011,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       if (!cmdName) {
         return bot.sendMessage(chatId, "❌ <b>Invalid command name.</b> Please send a single word with lowercase letters/numbers only:");
       }
-      if (promptsConfig.custom_commands?.[cmdName] || ['start', 'play', 'deposit', 'withdraw', 'support', 'language', 'cancel'].includes(cmdName)) {
+      if (promptsConfig.custom_commands?.[cmdName] || ['start', 'play', 'balance', 'deposit', 'withdraw', 'referral', 'affiliate', 'promoter_leaderboard', 'support', 'language', 'cancel'].includes(cmdName)) {
         return bot.sendMessage(chatId, `❌ Command name <b>/${cmdName}</b> is already taken or reserved. Please enter a different command name:`, { parse_mode: "HTML" });
       }
 
@@ -2794,6 +3034,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
           { command: "withdraw", description: "Withdraw ETB from your balance" },
           { command: "referral", description: "Invite friends and earn rewards" },
           { command: "affiliate", description: "View your affiliate dashboard and earnings" },
+          { command: "promoter_leaderboard", description: "View Weekly Promoter Leaderboard" },
           { command: "support", description: "Show contact support details" },
           { command: "language", description: "Change bot language" },
           { command: "cancel", description: "Cancel current operation or active flows" }
@@ -2804,9 +3045,14 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
           description: cfg.description || "Custom command"
         }));
 
-        await bot.setMyCommands([...systemCommands, ...customCommandsList]);
+        try {
+          await bot.setMyCommands([...systemCommands, ...customCommandsList]);
+          logBot("Bot commands updated successfully (new command).");
+        } catch (err: any) {
+          logBot(`Failed to set Telegram commands: ${err.message}`);
+        }
       } catch (err: any) {
-        logBot(`Failed to set Telegram commands: ${err.message}`);
+        logBot(`Error in outer re-sync registration: ${err.message}`);
       }
 
       userStates.set(userId, { step: 'idle' });
@@ -2836,6 +3082,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
               { command: "withdraw", description: "Withdraw ETB from your balance" },
               { command: "referral", description: "Invite friends and earn rewards" },
               { command: "affiliate", description: "View your affiliate dashboard and earnings" },
+              { command: "promoter_leaderboard", description: "View Weekly Promoter Leaderboard" },
               { command: "support", description: "Show contact support details" },
               { command: "language", description: "Change bot language" },
               { command: "cancel", description: "Cancel current operation or active flows" }
@@ -2846,8 +3093,15 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
               description: cfg.description || "Custom command"
             }));
 
-            await bot.setMyCommands([...systemCommands, ...customCommandsList]);
-          } catch (err: any) {}
+            try {
+              await bot.setMyCommands([...systemCommands, ...customCommandsList]);
+              logBot("Bot commands updated successfully (desc update).");
+            } catch (err: any) {
+              logBot(`Failed to set Telegram commands: ${err.message}`);
+            }
+          } catch (err: any) {
+            logBot(`Error in outer re-sync: ${err.message}`);
+          }
         } else if (field === 'photo') {
           let photoVal = text;
           if (msg.photo && msg.photo.length > 0) {
@@ -3265,6 +3519,53 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       }
       await bot.answerCallbackQuery(query.id);
       await renderAutoCampaignDashboard(chatId, messageId);
+      return;
+    }
+
+    if (data === "control_ai_instructions") {
+      if (!isStartingAdmin(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      await renderAIInstructionsPanel(chatId, messageId);
+      return;
+    }
+
+    if (data === "control_ai_edit") {
+      if (!isStartingAdmin(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      userStates.set(userId, { step: "editing_ai_instructions" });
+      await bot.answerCallbackQuery(query.id);
+      await bot.sendMessage(chatId, "📝 <b>Edit AI System Instructions</b>\n\nPlease send the new system instructions for the AI Support Assistant.\n\n<i>This will define how the AI behaves, what it knows about the game, and its safety rules.</i>\n\nType /cancel to abort.", { parse_mode: "HTML" });
+      return;
+    }
+
+    if (data === "control_user_lookup") {
+      if (!isStartingAdmin(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      await renderUserLookupPanel(chatId, messageId);
+      return;
+    }
+
+    if (data?.startsWith("lookup_user:")) {
+      if (!isStartingAdmin(parseInt(userId, 10))) return;
+      const targetId = data.split(":")[1];
+      await bot.answerCallbackQuery(query.id);
+      await processUserLookup(chatId, targetId);
+      return;
+    }
+
+    if (data === "lookup_manual_search") {
+      if (!isStartingAdmin(parseInt(userId, 10))) return;
+      userStates.set(userId, { step: "waiting_for_lookup_id" });
+      await bot.answerCallbackQuery(query.id);
+      await bot.sendMessage(chatId, "🔍 <b>Manual Search</b>\n\nPlease send the <b>Telegram ID</b> or <b>@username</b> of the user you want to investigate.\n\nType /cancel to abort.", { parse_mode: "HTML" });
       return;
     }
 
@@ -4363,6 +4664,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
               { command: "withdraw", description: "Withdraw ETB from your balance" },
               { command: "referral", description: "Invite friends and earn rewards" },
               { command: "affiliate", description: "View your affiliate dashboard and earnings" },
+              { command: "promoter_leaderboard", description: "View Weekly Promoter Leaderboard" },
               { command: "support", description: "Show contact support details" },
               { command: "language", description: "Change bot language" },
               { command: "cancel", description: "Cancel current operation or active flows" }
@@ -4373,8 +4675,15 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
               description: cfg.description || "Custom command"
             }));
 
-            await bot.setMyCommands([...systemCommands, ...customCommandsList]);
-          } catch (err) {}
+            try {
+              await bot.setMyCommands([...systemCommands, ...customCommandsList]);
+              logBot("Bot commands updated successfully (delete command).");
+            } catch (err: any) {
+              logBot(`Failed to set Telegram commands: ${err.message}`);
+            }
+          } catch (err: any) {
+            logBot(`Error in outer re-sync delete: ${err.message}`);
+          }
         }
         const text = "✨ <b>Custom Commands Main Panel</b>";
         await bot.sendMessage(chatId, text, {
@@ -4828,7 +5137,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
 
     if (isAdminAction) {
       const clickerId = query.from.id;
-      if (!isStartingAdmin(clickerId)) {
+      if (!adminChatIds.has(clickerId)) {
         logBot(`Unauthorized transaction action attempt by clickerId=${clickerId} on ${data}`);
         try {
           await bot.answerCallbackQuery(query.id, { 
@@ -4846,7 +5155,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
     const isBroadcastAction = data.startsWith("bcast_");
     if (isBroadcastAction) {
       const clickerId = query.from.id;
-      if (!isStartingAdmin(clickerId)) {
+      if (!adminChatIds.has(clickerId)) {
         logBot(`Unauthorized broadcast action attempt by clickerId=${clickerId} on ${data}`);
         try {
           await bot.answerCallbackQuery(query.id, { 

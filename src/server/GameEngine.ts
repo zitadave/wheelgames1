@@ -367,13 +367,38 @@ export function initGameEngine(io: Server) {
   const gridRooms: Record<string, {
     claimedSlots: { [key: number]: { isSelf: boolean, userId: string, username: string, photoUrl?: string } },
     roundId: number,
-    winners?: any
+    winners?: any,
+    history: any[]
   }> = {
-    '1-10': { claimedSlots: {}, roundId: Math.floor(Math.random() * 9000) + 1000 },
-    '1-20': { claimedSlots: {}, roundId: Math.floor(Math.random() * 9000) + 1000 },
-    'mini': { claimedSlots: {}, roundId: Math.floor(Math.random() * 9000) + 1000 },
-    'grand': { claimedSlots: {}, roundId: Math.floor(Math.random() * 9000) + 1000 }
+    '1-10': { claimedSlots: {}, roundId: Math.floor(Math.random() * 9000) + 1000, history: [] },
+    '1-20': { claimedSlots: {}, roundId: Math.floor(Math.random() * 9000) + 1000, history: [] },
+    'mini': { claimedSlots: {}, roundId: Math.floor(Math.random() * 9000) + 1000, history: [] },
+    'grand': { claimedSlots: {}, roundId: Math.floor(Math.random() * 9000) + 1000, history: [] }
   };
+
+  // Pre-fetch history for grid rooms
+  Object.keys(gridRooms).forEach(async (roomName) => {
+      try {
+        const { supabase } = await import("./supabase.js");
+        if (supabase) {
+            const { data: historyData } = await supabase
+              .from("rounds")
+              .select("round_number, winner, pools_even, pools_odd") // Note: pools_even/odd might not apply, need to check DB schema if possible. Using winners instead.
+              .eq("room_id", roomName)
+              .order("round_number", { ascending: false })
+              .limit(10);
+            
+            if (historyData) {
+                gridRooms[roomName].history = historyData.map(r => ({
+                    roundId: r.round_number,
+                    winners: { 1: r.winner } // Need to adapt to history structure used in WheelOfChance/JackpotArena
+                }));
+            }
+        }
+      } catch (err) {
+          console.error(`Failed to fetch history for grid room ${roomName}:`, err);
+      }
+  });
 
   // Setup Realtime Listener for Balance Changes
   import("./supabase.js").then(({ supabase }) => {
@@ -781,6 +806,31 @@ export function initGameEngine(io: Server) {
       socket.join(roomName);
       if (!gridRooms[roomName]) gridRooms[roomName] = { claimedSlots: {}, roundId: 1 };
       socket.emit("grid_state", gridRooms[roomName]);
+    });
+
+    socket.on("grid_gameResult", async (data: { room: string, roundId: number, winners: any }) => {
+        const room = gridRooms[data.room];
+        if (room) {
+            room.history.unshift({ roundId: data.roundId, winners: data.winners });
+            if (room.history.length > 10) room.history.pop();
+            
+            // Save to Supabase
+            try {
+                const { supabase } = await import("./supabase.js");
+                if (supabase) {
+                    await supabase.from("rounds").insert({
+                        round_number: data.roundId,
+                        winner: data.winners[1] || data.winners.first, // Adapt structure
+                        room_id: data.room
+                    });
+                }
+            } catch (err) {
+                console.error("Failed to save grid game result to Supabase:", err);
+            }
+            
+            // Broadcast the updated history
+            io.to(data.room).emit("grid_state", room);
+        }
     });
 
     socket.on("grid_claimSlot", async (data: { room: string, num: number, userId: string, username: string, photoUrl?: string }, callback) => {

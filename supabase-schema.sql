@@ -105,3 +105,15 @@ CREATE TABLE IF NOT EXISTS bets (
     side TEXT NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
+
+-- Create the bot_config table for dynamic settings
+CREATE TABLE IF NOT EXISTS bot_config (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
+);
+
+-- Insert default AI instructions if not exists
+INSERT INTO bot_config (key, value)
+VALUES ('ai_system_instruction', 'You are the primary AI Support Assistant for ETB Game Hub. Provide helpful, polite, and accurate support in Amharic and English.')
+ON CONFLICT (key) DO NOTHING;

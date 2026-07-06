@@ -72,6 +72,13 @@ export const WheelOfChance = React.memo(function WheelOfChance({
     const onGridState = (state: any) => {
        if (!state) return;
        
+       if (state.history) {
+          setHistory(prev => ({
+             ...prev,
+             [activeRoom]: state.history
+          }));
+       }
+
        if (state.roundId) {
          setRoundIds(prev => ({
            ...prev,
@@ -418,13 +425,7 @@ export const WheelOfChance = React.memo(function WheelOfChance({
       setWinners(prev => {
         const newWinners = { ...prev, [thisDraw]: winningSectorVal };
         if (thisDraw === (activeRoom === '1-10' ? 2 : 3)) {
-          setHistory(h => {
-            if (h[activeRoom].some((x: any) => x.roundId === currentRoundId)) return h;
-            return {
-              ...h,
-              [activeRoom]: [{ roundId: currentRoundId, winners: newWinners }, ...h[activeRoom]].slice(0, 10)
-            };
-          });
+          socket?.emit('grid_gameResult', { room: activeRoom, roundId: currentRoundId, winners: newWinners });
         }
         return newWinners;
       });
@@ -769,7 +770,7 @@ export const WheelOfChance = React.memo(function WheelOfChance({
                 : 'text-gray-400 hover:text-gray-200 font-bold'
             } ${phase !== 'lobby' ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
           >
-            🎯 1–10 Room
+            🎯 ፈጣን 10 ሰው
           </button>
           <button
             onClick={() => {
@@ -782,7 +783,7 @@ export const WheelOfChance = React.memo(function WheelOfChance({
                 : 'text-gray-400 hover:text-gray-200 font-bold'
             } ${phase !== 'lobby' ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
           >
-            🎯 1–20 Room
+            🎯 ፈጣን 20 ሰው
           </button>
         </div>
       </div>

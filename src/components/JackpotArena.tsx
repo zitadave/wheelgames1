@@ -89,6 +89,13 @@ export const JackpotArena = React.memo(function JackpotArena({
     const onGridState = (state: any) => {
        if (!state) return;
        
+       if (state.history) {
+          setHistory(prev => ({
+             ...prev,
+             [tier]: state.history
+          }));
+       }
+       
        if (state.roundId) {
          setRoundIds(prev => ({
            ...prev,
@@ -494,16 +501,7 @@ export const JackpotArena = React.memo(function JackpotArena({
       else updated.third = winnerNum;
 
       if (drawIndex === 3) {
-        setHistory(h => {
-          if (h[tier].some((x: any) => x.roundId === currentRoundId)) return h;
-          return {
-            ...h,
-            [tier]: [
-              { roundId: currentRoundId, winners: { 1: updated.first, 2: updated.second, 3: updated.third } },
-              ...h[tier]
-            ].slice(0, 10)
-          };
-        });
+        socket?.emit('grid_gameResult', { room: tier, roundId: currentRoundId, winners: { 1: updated.first, 2: updated.second, 3: updated.third } });
       }
 
       return updated;

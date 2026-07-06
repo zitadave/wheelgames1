@@ -342,19 +342,7 @@ class Room {
   }
 }
 
-export let gridRooms: Record<string, {
-    claimedSlots: { [key: number]: { isSelf: boolean, userId: string, username: string, photoUrl?: string } },
-    roundId: number,
-    winners?: any,
-    history: any[]
-}> = {
-    '1-10': { claimedSlots: {}, roundId: Math.floor(Math.random() * 9000) + 1000, history: [] },
-    '1-20': { claimedSlots: {}, roundId: Math.floor(Math.random() * 9000) + 1000, history: [] },
-    'mini': { claimedSlots: {}, roundId: Math.floor(Math.random() * 9000) + 1000, history: [] },
-    'grand': { claimedSlots: {}, roundId: Math.floor(Math.random() * 9000) + 1000, history: [] }
-};
-
-export async function initGameEngine(io: Server) {
+export function initGameEngine(io: Server) {
   const rooms = {
     "Main-Room": new Room("Main-Room", io),
   };
@@ -374,6 +362,18 @@ export async function initGameEngine(io: Server) {
       second: picked[1],
       third: picked[2]
     };
+  };
+
+  const gridRooms: Record<string, {
+    claimedSlots: { [key: number]: { isSelf: boolean, userId: string, username: string, photoUrl?: string } },
+    roundId: number,
+    winners?: any,
+    history: any[]
+  }> = {
+    '1-10': { claimedSlots: {}, roundId: Math.floor(Math.random() * 9000) + 1000, history: [] },
+    '1-20': { claimedSlots: {}, roundId: Math.floor(Math.random() * 9000) + 1000, history: [] },
+    'mini': { claimedSlots: {}, roundId: Math.floor(Math.random() * 9000) + 1000, history: [] },
+    'grand': { claimedSlots: {}, roundId: Math.floor(Math.random() * 9000) + 1000, history: [] }
   };
 
   // Pre-fetch history for grid rooms
@@ -400,7 +400,41 @@ export async function initGameEngine(io: Server) {
       }
   });
 
-  return gridRooms;
+  // Setup Realtime Listener for Balance Changes
+  import("./supabase.js").then(({ supabase }) => {
+    if (supabase) {
+      supabase.channel('public:users')
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'users' }, (payload) => {
+          const updatedUser = payload.new;
+          if (updatedUser && updatedUser.id) {
+            io.to(`user_${updatedUser.id}`).emit('syncBalance', updatedUser.balance);
+          }
+        })
+        .subscribe();
+    }
+  }).catch(console.error);
+
+  io.on("connection", (socket: Socket) => {
+    let currentRoomId: string | null = null;
+    
+    // Auth & Balance syncing
+    socket.on("syncUser", async (userId: string, username: string, photoUrl?: string, firstName?: string, lastName?: string) => {
+      // Join a personal room to receive private realtime updates
+      socket.join(`user_${userId}`);
+      
+      const clientIp = socket.handshake.headers['x-forwarded-for'] || socket.handshake.address;
+
+      try {
+        const { supabase } = await import("./supabase.js");
+        if (!supabase) return;
+        
+        if (clientIp) {
+            const ipString = Array.isArray(clientIp) ? clientIp[0] : clientIp;
+            const { data: existingIp } = await supabase.from("transactions").select("id").eq("user_id", userId).eq("type", "ip_log").eq("description", `IP: ${ipString}`).limit(1);
+            if (!existingIp || existingIp.length === 0) {
+                await supabase.from("transactions").insert({ user_id: userId, amount: 0, type: "ip_log", description: `IP: ${ipString}` });
+            }
+        }
 
         
         // Fetch user first to see if they exist
@@ -441,11 +475,13 @@ export async function initGameEngine(io: Server) {
           if (updatedUser) user = updatedUser;
         }
           
-    socket.on("syncUser", async (userId: string, username: string, photoUrl?: string, firstName?: string, lastName?: string) => {
-            if (user) {
-               socket.emit("syncBalance", user.balance);
-            }
-        });
+        if (user) {
+           socket.emit("syncBalance", user.balance);
+        }
+      } catch (e) {
+        console.error("Sync user error:", e);
+      }
+    });
 
     socket.on("logTransaction", async (data: { userId: string, amount: number, type: string, description: string, newBalance: number }) => {
       try {
@@ -881,4 +917,5 @@ export async function initGameEngine(io: Server) {
         if (callback) callback({ success: false, message: "Room not found." });
       }
     });
+  });
 }

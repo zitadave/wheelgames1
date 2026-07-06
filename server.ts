@@ -6,7 +6,6 @@ import { createServer } from "http";
 import { Server } from "socket.io";
 import { initGameEngine } from "./src/server/GameEngine.js";
 import { initTelegramBot, getBotUsername, getBotLogs, triggerBotFlow } from "./src/server/telegramBot.js";
-import { initScheduler } from "./src/server/scheduler.js";
 import { fetchLeaderboardData } from "./src/server/leaderboardHelper.js";
 import dotenv from "dotenv";
 import rateLimit from "express-rate-limit";
@@ -34,9 +33,6 @@ async function startServer() {
   
   // Initialize Telegram Bot
   await initTelegramBot(io);
-  
-  // Initialize Scheduler
-  initScheduler();
 
   // API routes
   app.get("/api/health", (req, res) => {

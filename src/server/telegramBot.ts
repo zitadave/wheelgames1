@@ -4,11 +4,10 @@ import { supabase } from "./supabase.js";
 import { getAnalysisSummary } from "./analysis.js";
 import { Server } from "socket.io";
 import { fetchLeaderboardData, getStartOfWeekUTC } from "./leaderboardHelper.js";
+import { startAnnouncementScheduler, loadAnnouncements, saveAnnouncements, Announcement } from "./announcementManager.js";
 import * as fs from "fs";
 import * as path from "path";
 import { handleSupportChat } from "./aiSupport.js";
-import { triggerAnnouncement, loadAnnouncements, saveAnnouncements } from "./announcementManager.js";
-import { v4 as uuidv4 } from 'uuid';
 
 let botInfo: any = null;
 let botInstance: any = null;
@@ -31,25 +30,15 @@ export function getBotLogs() {
 
 export async function postToChannel(message: string, options?: any) {
   const channelId = process.env.CHANNEL_ID;
-  console.log("Attempting to post to channel. CHANNEL_ID:", channelId);
   if (!channelId || !botInstance) {
     console.warn("CHANNEL_ID or Bot Instance not found. Cannot post to channel.");
     return;
   }
   try {
-    if (options && options.photo) {
-      await botInstance.sendPhoto(channelId, options.photo, {
-        caption: message,
-        parse_mode: "HTML",
-        ...options,
-      });
-    } else {
-      await botInstance.sendMessage(channelId, message, {
-        parse_mode: "HTML",
-        ...options,
-      });
-    }
-    console.log("Successfully posted to channel.");
+    await botInstance.sendMessage(channelId, message, {
+      parse_mode: "HTML",
+      ...options,
+    });
   } catch (err) {
     console.error("Failed to post to channel:", err);
   }
@@ -1093,6 +1082,59 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
     });
   }
 
+  
+  bot.onText(/\/list_of_recent_announcement/, (msg) => { bot.sendMessage(msg.chat.id, "Please use /announcement instead."); });
+  bot.onText(/\/list_of_recent_announcement/, (msg) => {
+    const chatId = msg.chat.id;
+    if (!isStartingAdmin(msg.from?.id)) {
+      return bot.sendMessage(chatId, "❌ Access Denied.");
+    }
+    const anns = loadAnnouncements();
+    if (anns.length === 0) {
+      return bot.sendMessage(chatId, "📋 Recent Announcements:\n\nNo announcements found.");
+    }
+    let text = "📢 <b>Recent Announcements:</b>\n\n";
+    anns.forEach(a => {
+      text += "<b>ID:</b> <code>" + a.id + "</code>\n<b>Type:</b> " + a.type + "\n<b>Interval (hrs):</b> " + a.intervalHours + "\n<b>Enabled:</b> " + a.enabled + "\n\n";
+    });
+    bot.sendMessage(chatId, text, { parse_mode: "HTML" });
+  });
+
+  bot.onText(/\/announcement/, (msg) => {
+    const chatId = msg.chat.id;
+    if (!isStartingAdmin(msg.from?.id)) {
+      return bot.sendMessage(chatId, "❌ Access Denied.");
+    }
+    const anns = loadAnnouncements();
+    if (anns.length === 0) {
+      return bot.sendMessage(chatId, "📋 Recent Announcements:\n\nNo announcements found.");
+    }
+    let text = "📢 <b>Announcements:</b>\n\n";
+    anns.forEach(a => {
+      text += `<b>ID:</b> <code>${a.id}</code>\n<b>Type:</b> ${a.type}\n<b>Interval (hrs):</b> ${a.intervalHours}\n<b>Enabled:</b> ${a.enabled}\n\n`;
+    });
+    bot.sendMessage(chatId, text, { parse_mode: "HTML" });
+  });
+
+  bot.onText(/\/announcement_delete(?: (.+))?/, (msg, match) => {
+    const chatId = msg.chat.id;
+    if (!isStartingAdmin(msg.from?.id)) {
+      return bot.sendMessage(chatId, "❌ Access Denied.");
+    }
+    const id = match && match[1];
+    if (!id) return bot.sendMessage(chatId, "Please specify an ID. Usage: /announcement_delete <id>");
+    
+    let anns = loadAnnouncements();
+    const initialLen = anns.length;
+    anns = anns.filter(a => a.id !== id);
+    if (anns.length < initialLen) {
+      saveAnnouncements(anns);
+      bot.sendMessage(chatId, `✅ Announcement ${id} deleted.`);
+    } else {
+      bot.sendMessage(chatId, `❌ Announcement ${id} not found.`);
+    }
+  });
+
   bot.onText(/\/setadmin/, (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from?.id;
@@ -1153,10 +1195,8 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
           { text: "🔍 User Lookup", callback_data: "control_user_lookup" }
         ],
         [
-          { text: "📋 List Announcements", callback_data: "announcement_list" }
-        ],
-        [
-          { text: "🤝 Manage Affiliate", callback_data: "control_manage_affiliate" }
+          { text: "🤝 Manage Affiliate", callback_data: "control_manage_affiliate" },
+          { text: "📢 Announcements", callback_data: "control_announcements" }
         ]
       ]
     };
@@ -2001,32 +2041,6 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
         ]
       }
     });
-  });
-
-  bot.onText(/\/announcement_list/, async (msg) => {
-    if (!isStartingAdmin(msg.from?.id)) {
-      bot.sendMessage(msg.chat.id, "❌ Access Denied");
-      return;
-    }
-    const announcements = loadAnnouncements();
-    let text = "📋 <b>Recent Announcements:</b>\n\n";
-    announcements.slice(-10).forEach(a => {
-        text += `ID: <code>${a.id}</code> | Status: ${a.status} | Type: ${a.type}\nText: ${a.text.substring(0, 30)}...\n\n`;
-    });
-    bot.sendMessage(msg.chat.id, text, { parse_mode: "HTML" });
-  });
-
-  bot.onText(/\/announcement_delete (.+)/, async (msg, match) => {
-    if (!isStartingAdmin(msg.from?.id)) {
-      bot.sendMessage(msg.chat.id, "❌ Access Denied");
-      return;
-    }
-    const id = match?.[1];
-    if (!id) return;
-    let announcements = loadAnnouncements();
-    announcements = announcements.filter(a => a.id !== id);
-    saveAnnouncements(announcements);
-    bot.sendMessage(msg.chat.id, `✅ Deleted announcement ${id}`);
   });
 
   // --- MESSAGE STEP-BY-STEP HANDLERS ---
@@ -3572,60 +3586,6 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       }
       return;
     }
-
-    if (data === "announcement_list") {
-      if (!isStartingAdmin(parseInt(userId, 10))) {
-        await bot.answerCallbackQuery(query.id, { text: "❌ Owner Only", show_alert: true });
-        return;
-      }
-      await bot.answerCallbackQuery(query.id);
-      
-      const announcements = loadAnnouncements();
-      let text = "📋 <b>Recent Announcements:</b>\n\n";
-      if (announcements.length === 0) text += "No announcements found.";
-      
-      const keyboard: any[] = [];
-      announcements.slice(-5).forEach(a => {
-        text += `ID: <code>${a.id}</code> | Status: ${a.status} | Type: ${a.type}\nText: ${a.text.substring(0, 30)}...\n\n`;
-        keyboard.push([{ text: `🗑️ Delete ${a.id.substring(0, 8)}`, callback_data: `announcement_delete_${a.id}` }]);
-      });
-      keyboard.push([{ text: "🔙 Back to Control", callback_data: "control_analysis" }]);
-
-      if (messageId) {
-        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: { inline_keyboard: keyboard } });
-      } else {
-        await bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: { inline_keyboard: keyboard } });
-      }
-      return;
-    }
-
-    if (data?.startsWith("announcement_delete_")) {
-      if (!isStartingAdmin(parseInt(userId, 10))) {
-        await bot.answerCallbackQuery(query.id, { text: "❌ Owner Only", show_alert: true });
-        return;
-      }
-      const id = data.split("_")[2];
-      let announcements = loadAnnouncements();
-      announcements = announcements.filter(a => a.id !== id);
-      saveAnnouncements(announcements);
-      
-      await bot.answerCallbackQuery(query.id, { text: "✅ Deleted", show_alert: false });
-      // Refresh list
-      const keyboard: any[] = [];
-      let text = "📋 <b>Recent Announcements:</b>\n\n";
-      announcements.slice(-5).forEach(a => {
-        text += `ID: <code>${a.id}</code> | Status: ${a.status} | Type: ${a.type}\nText: ${a.text.substring(0, 30)}...\n\n`;
-        keyboard.push([{ text: `🗑️ Delete ${a.id.substring(0, 8)}`, callback_data: `announcement_delete_${a.id}` }]);
-      });
-      keyboard.push([{ text: "🔙 Back to Control", callback_data: "control_analysis" }]);
-      
-      if (messageId) {
-        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: { inline_keyboard: keyboard } });
-      } else {
-        await bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: { inline_keyboard: keyboard } });
-      }
-      return;
-    }
     if (data === "control_broadcast") {
       if (!isStartingAdmin(parseInt(userId, 10))) {
         await bot.answerCallbackQuery(query.id, { text: "❌ Owner Only", show_alert: true });
@@ -4091,6 +4051,44 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       if (messageId) {
         await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: { inline_keyboard: inlineKeyboard } });
       }
+      return;
+    }
+
+    
+    if (data === "control_announcements") {
+      if (!isStartingAdmin(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      const anns = loadAnnouncements();
+      let text = "📢 <b>Announcements Control</b>\n\n";
+      text += `Total announcements: ${anns.length}\n\n`;
+      text += "Use commands:\n/announcement\n/announcement_delete <id>";
+      const keyboard = {
+        inline_keyboard: [
+           [{ text: "▶️ Test All Announcements Now", callback_data: "control_test_announcement_all" }],
+           [{ text: "◀️ Back to Control Panel", callback_data: "control_panel_back" }]
+        ]
+      };
+      bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard });
+      return;
+    }
+    
+    if (data === "control_test_announcement_all") {
+      if (!isStartingAdmin(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      const { processAnnouncements } = require("./announcementManager.js");
+      // Force trigger all
+      const anns = loadAnnouncements();
+      for (const ann of anns) {
+        ann.lastRunTime = 0;
+      }
+      saveAnnouncements(anns);
+      bot.sendMessage(chatId, "✅ All announcements will trigger on the next scheduler tick (max 5 mins). You can check the channel.");
       return;
     }
 
@@ -6352,17 +6350,6 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
           .replace(/{ref}/g, refCode);
         await bot.sendMessage(request.chatId, successMsg, { parse_mode: "Markdown" });
         await postToChannel(`✅ <b>New Deposit Confirmed!</b>\n\n👤 <b>User:</b> @${request.username}\n💰 <b>Amount:</b> <code>${request.amount.toLocaleString()} ETB</code>\n🧾 <b>Ref:</b> <code>${refCode}</code>`);
-        
-        if (request.amount > 50000) {
-          const announcement = {
-            id: uuidv4(),
-            type: 'auto_deposit',
-            text: `🔥 <b>Big Deposit Confirmed!</b>\n\n💰 <b>Amount:</b> <code>${request.amount.toLocaleString()} ETB</code>\n\n<i>#SocialProof #Deposit</i>`,
-            status: 'posted' as const
-          };
-          saveAnnouncement(announcement);
-          await triggerAnnouncement(announcement);
-        }
 
         // Update Client App UI Instantly via socket
         io.emit('balanceUpdated', { userId: request.userId, balance: newBalance });
@@ -6473,17 +6460,6 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
           .replace(/{ref}/g, refCode);
         await bot.sendMessage(request.chatId, successMsg, { parse_mode: "Markdown" });
         await postToChannel(`📤 <b>New Withdrawal Processed!</b>\n\n👤 <b>User:</b> @${request.username}\n💰 <b>Amount:</b> <code>${request.amount.toLocaleString()} ETB</code>\n🧾 <b>Ref:</b> <code>${refCode}</code>`);
-        
-        if (request.amount > 20000) {
-          const announcement = {
-            id: uuidv4(),
-            type: 'auto_withdraw',
-            text: `🚀 <b>Large Withdrawal Processed!</b>\n\n💰 <b>Amount:</b> <code>${request.amount.toLocaleString()} ETB</code>\n\n<i>#SocialProof #Withdrawal</i>`,
-            status: 'posted' as const
-          };
-          saveAnnouncement(announcement);
-          await triggerAnnouncement(announcement);
-        }
 
         // Delete from pending store
         pendingRequests.delete(requestId);
@@ -6583,6 +6559,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
 
   // Start automated campaign background scheduler
   startAutoCampaignScheduler(bot);
+  startAnnouncementScheduler(bot);
   
   // Start automated weekly promoter jackpot scheduler
   startAutomatedJackpotScheduler(bot);

@@ -7,6 +7,8 @@ import { fetchLeaderboardData, getStartOfWeekUTC } from "./leaderboardHelper.js"
 import * as fs from "fs";
 import * as path from "path";
 import { handleSupportChat } from "./aiSupport.js";
+import { triggerAnnouncement, loadAnnouncements, saveAnnouncements } from "./announcementManager.js";
+import { v4 as uuidv4 } from 'uuid';
 
 let botInfo: any = null;
 let botInstance: any = null;
@@ -25,6 +27,32 @@ export function logBot(msg: string) {
 
 export function getBotLogs() {
   return botLogs;
+}
+
+export async function postToChannel(message: string, options?: any) {
+  const channelId = process.env.CHANNEL_ID;
+  console.log("Attempting to post to channel. CHANNEL_ID:", channelId);
+  if (!channelId || !botInstance) {
+    console.warn("CHANNEL_ID or Bot Instance not found. Cannot post to channel.");
+    return;
+  }
+  try {
+    if (options && options.photo) {
+      await botInstance.sendPhoto(channelId, options.photo, {
+        caption: message,
+        parse_mode: "HTML",
+        ...options,
+      });
+    } else {
+      await botInstance.sendMessage(channelId, message, {
+        parse_mode: "HTML",
+        ...options,
+      });
+    }
+    console.log("Successfully posted to channel.");
+  } catch (err) {
+    console.error("Failed to post to channel:", err);
+  }
 }
 
 function escapeHTML(str: string) {
@@ -253,6 +281,10 @@ interface PromptsConfig {
   withdraw_approved_msg: string;
   withdraw_declined_msg: string;
 
+  start_msg: string;
+  balance_msg: string;
+  affiliate_msg: string;
+
   welcome_msg: string;
   welcome_image?: string;
   welcome_guest_msg: string;
@@ -287,6 +319,10 @@ const DEFAULT_PROMPTS_CONFIG: PromptsConfig = {
   withdraw_success_msg: "✅ *Your withdrawal Request of {amount} ETB have been sent to admins please wait 1 min.*",
   withdraw_approved_msg: "✅ *Your withdrawal of {amount} ETB is confirmed.*\n🧾 *Ref:* `{ref}`",
   withdraw_declined_msg: "❌ *Withdrawal Declined*\n\nYour withdrawal of *{amount} Birr* was declined and refunded.",
+
+  start_msg: "👋 *Welcome to ETB Game Hub!* 🎮\n\n_(This is the default start message, edit it in /control)_",
+  balance_msg: "💳 *Your current balance:* `{balance} ETB`",
+  affiliate_msg: "🤝 *Join our Affiliate Program!*\n\nInvite friends and earn commissions.",
 
   welcome_msg: "👋 *Welcome to ETB Game Hub, {name}!* 🎮\n\nExperience the thrill of real-time multiplayer gaming right here in Telegram!\n\n💰 *Your current balance:* `{balance}`\n\n🚀 *Available Games:*\n• 🟢 *Even/Odd* - High-octane multipliers and double-ups\n• 🏆 *Jackpot Arena* - Secure spots and sweep the pool prize\n• 🎡 *Wheel of Chance* - High stakes wheel of fortune\n\n👇 Click the button below to launch the Mini App and start playing immediately!",
   welcome_image: "",
@@ -1117,6 +1153,9 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
           { text: "🔍 User Lookup", callback_data: "control_user_lookup" }
         ],
         [
+          { text: "📋 List Announcements", callback_data: "announcement_list" }
+        ],
+        [
           { text: "🤝 Manage Affiliate", callback_data: "control_manage_affiliate" }
         ]
       ]
@@ -1421,6 +1460,9 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
         ],
         [
           { text: "📤 Withdrawal Flow Prompts", callback_data: "edit_section_withdrawal" }
+        ],
+        [
+          { text: "🤖 General/Command Prompts", callback_data: "edit_section_commands" }
         ],
         [
           { text: "🤝 Referral Prompt", callback_data: "edit_section_referral" }
@@ -1961,6 +2003,32 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
     });
   });
 
+  bot.onText(/\/announcement_list/, async (msg) => {
+    if (!isStartingAdmin(msg.from?.id)) {
+      bot.sendMessage(msg.chat.id, "❌ Access Denied");
+      return;
+    }
+    const announcements = loadAnnouncements();
+    let text = "📋 <b>Recent Announcements:</b>\n\n";
+    announcements.slice(-10).forEach(a => {
+        text += `ID: <code>${a.id}</code> | Status: ${a.status} | Type: ${a.type}\nText: ${a.text.substring(0, 30)}...\n\n`;
+    });
+    bot.sendMessage(msg.chat.id, text, { parse_mode: "HTML" });
+  });
+
+  bot.onText(/\/announcement_delete (.+)/, async (msg, match) => {
+    if (!isStartingAdmin(msg.from?.id)) {
+      bot.sendMessage(msg.chat.id, "❌ Access Denied");
+      return;
+    }
+    const id = match?.[1];
+    if (!id) return;
+    let announcements = loadAnnouncements();
+    announcements = announcements.filter(a => a.id !== id);
+    saveAnnouncements(announcements);
+    bot.sendMessage(msg.chat.id, `✅ Deleted announcement ${id}`);
+  });
+
   // --- MESSAGE STEP-BY-STEP HANDLERS ---
   bot.on("message", async (msg) => {
     const chatId = msg.chat.id;
@@ -2218,6 +2286,7 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
               [{ text: "📝 Referral Message Text", callback_data: "edit_key_referral_msg" }],
               [{ text: "🖼️ Referral Image", callback_data: "edit_key_referral_image" }],
               [{ text: "📤 Referral Share Text", callback_data: "edit_key_referral_share_text" }],
+              [{ text: "🖼️ Referral Share Image", callback_data: "edit_key_referral_share_image" }],
               [{ text: "🔘 Referral Buttons Menu", callback_data: "edit_section_referral_buttons" }],
               [{ text: "🔙 Back", callback_data: "control_edit" }]
             ];
@@ -2226,7 +2295,9 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
             sectionTitle = "👋 Welcome & Support Prompts";
             sectionButtons = [
               [{ text: "👋 Welcome Message (Registered)", callback_data: "edit_key_welcome_msg" }],
+              [{ text: "🖼️ Welcome Image (Registered)", callback_data: "edit_key_welcome_image" }],
               [{ text: "👋 Guest Welcome Message (Unregistered)", callback_data: "edit_key_welcome_guest_msg" }],
+              [{ text: "🖼️ Guest Welcome Image (Unregistered)", callback_data: "edit_key_welcome_guest_image" }],
               [{ text: "📞 Support Card Message", callback_data: "edit_key_support_card_msg" }],
               [{ text: "🔙 Back", callback_data: "control_edit" }]
             ];
@@ -3501,6 +3572,60 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       }
       return;
     }
+
+    if (data === "announcement_list") {
+      if (!isStartingAdmin(parseInt(userId, 10))) {
+        await bot.answerCallbackQuery(query.id, { text: "❌ Owner Only", show_alert: true });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      
+      const announcements = loadAnnouncements();
+      let text = "📋 <b>Recent Announcements:</b>\n\n";
+      if (announcements.length === 0) text += "No announcements found.";
+      
+      const keyboard: any[] = [];
+      announcements.slice(-5).forEach(a => {
+        text += `ID: <code>${a.id}</code> | Status: ${a.status} | Type: ${a.type}\nText: ${a.text.substring(0, 30)}...\n\n`;
+        keyboard.push([{ text: `🗑️ Delete ${a.id.substring(0, 8)}`, callback_data: `announcement_delete_${a.id}` }]);
+      });
+      keyboard.push([{ text: "🔙 Back to Control", callback_data: "control_analysis" }]);
+
+      if (messageId) {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: { inline_keyboard: keyboard } });
+      } else {
+        await bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: { inline_keyboard: keyboard } });
+      }
+      return;
+    }
+
+    if (data?.startsWith("announcement_delete_")) {
+      if (!isStartingAdmin(parseInt(userId, 10))) {
+        await bot.answerCallbackQuery(query.id, { text: "❌ Owner Only", show_alert: true });
+        return;
+      }
+      const id = data.split("_")[2];
+      let announcements = loadAnnouncements();
+      announcements = announcements.filter(a => a.id !== id);
+      saveAnnouncements(announcements);
+      
+      await bot.answerCallbackQuery(query.id, { text: "✅ Deleted", show_alert: false });
+      // Refresh list
+      const keyboard: any[] = [];
+      let text = "📋 <b>Recent Announcements:</b>\n\n";
+      announcements.slice(-5).forEach(a => {
+        text += `ID: <code>${a.id}</code> | Status: ${a.status} | Type: ${a.type}\nText: ${a.text.substring(0, 30)}...\n\n`;
+        keyboard.push([{ text: `🗑️ Delete ${a.id.substring(0, 8)}`, callback_data: `announcement_delete_${a.id}` }]);
+      });
+      keyboard.push([{ text: "🔙 Back to Control", callback_data: "control_analysis" }]);
+      
+      if (messageId) {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: { inline_keyboard: keyboard } });
+      } else {
+        await bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: { inline_keyboard: keyboard } });
+      }
+      return;
+    }
     if (data === "control_broadcast") {
       if (!isStartingAdmin(parseInt(userId, 10))) {
         await bot.answerCallbackQuery(query.id, { text: "❌ Owner Only", show_alert: true });
@@ -3754,6 +3879,27 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
       }
       await bot.answerCallbackQuery(query.id);
       sendEditPanelMenu(chatId, messageId);
+      return;
+    }
+
+    if (data === "edit_section_commands") {
+      if (!isStartingAdmin(parseInt(userId, 10))) {
+        bot.answerCallbackQuery(query.id, { text: "❌ Access Denied" });
+        return;
+      }
+      await bot.answerCallbackQuery(query.id);
+      const text = "🤖 <b>General/Command Prompts</b>\nSelect which prompt you want to edit:";
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "🚀 Start Command Message", callback_data: "edit_key_start_msg" }],
+          [{ text: "💳 Balance Command Message", callback_data: "edit_key_balance_msg" }],
+          [{ text: "🤝 Affiliate Command Message", callback_data: "edit_key_affiliate_msg" }],
+          [{ text: "🔙 Back", callback_data: "control_edit" }]
+        ]
+      };
+      if (messageId) {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: keyboard });
+      }
       return;
     }
 
@@ -6205,6 +6351,18 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
           .replace(/{amount}/g, request.amount.toLocaleString())
           .replace(/{ref}/g, refCode);
         await bot.sendMessage(request.chatId, successMsg, { parse_mode: "Markdown" });
+        await postToChannel(`✅ <b>New Deposit Confirmed!</b>\n\n👤 <b>User:</b> @${request.username}\n💰 <b>Amount:</b> <code>${request.amount.toLocaleString()} ETB</code>\n🧾 <b>Ref:</b> <code>${refCode}</code>`);
+        
+        if (request.amount > 50000) {
+          const announcement = {
+            id: uuidv4(),
+            type: 'auto_deposit',
+            text: `🔥 <b>Big Deposit Confirmed!</b>\n\n💰 <b>Amount:</b> <code>${request.amount.toLocaleString()} ETB</code>\n\n<i>#SocialProof #Deposit</i>`,
+            status: 'posted' as const
+          };
+          saveAnnouncement(announcement);
+          await triggerAnnouncement(announcement);
+        }
 
         // Update Client App UI Instantly via socket
         io.emit('balanceUpdated', { userId: request.userId, balance: newBalance });
@@ -6314,6 +6472,18 @@ export async function initTelegramBot(io: Server): Promise<string | null> {
           .replace(/{amount}/g, request.amount.toLocaleString())
           .replace(/{ref}/g, refCode);
         await bot.sendMessage(request.chatId, successMsg, { parse_mode: "Markdown" });
+        await postToChannel(`📤 <b>New Withdrawal Processed!</b>\n\n👤 <b>User:</b> @${request.username}\n💰 <b>Amount:</b> <code>${request.amount.toLocaleString()} ETB</code>\n🧾 <b>Ref:</b> <code>${refCode}</code>`);
+        
+        if (request.amount > 20000) {
+          const announcement = {
+            id: uuidv4(),
+            type: 'auto_withdraw',
+            text: `🚀 <b>Large Withdrawal Processed!</b>\n\n💰 <b>Amount:</b> <code>${request.amount.toLocaleString()} ETB</code>\n\n<i>#SocialProof #Withdrawal</i>`,
+            status: 'posted' as const
+          };
+          saveAnnouncement(announcement);
+          await triggerAnnouncement(announcement);
+        }
 
         // Delete from pending store
         pendingRequests.delete(requestId);

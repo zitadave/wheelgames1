@@ -303,11 +303,10 @@ export const WheelOfChance = React.memo(function WheelOfChance({
         // Unclaim
         socket?.emit('grid_releaseSlot', { room: activeRoom, num, userId }, (res: any) => {
            if (res?.success) {
-              setBalance(prev => {
-                const newBalance = prev + entryFee;
-                socket?.emit('logTransaction', { userId, amount: entryFee, type: 'refund', description: `Released Slot #${num} (${activeRoom} Room)`, newBalance });
-                return newBalance;
-              });
+              // Server handles balance update
+              socket?.emit('syncUser', userId, username, photoUrl);
+              socket?.emit('getUserTransactions', userId);
+              
               setTransactions(prev => [
                 { id: Date.now(), type: 'bet', desc: `Released Slot #${num} (${activeRoom} Room)`, amount: entryFee, date: 'Just now', positive: true },
                 ...prev
@@ -335,11 +334,10 @@ export const WheelOfChance = React.memo(function WheelOfChance({
 
     socket?.emit('grid_claimSlot', { room: activeRoom, num, userId, username, photoUrl }, (res: any) => {
       if (res?.success) {
-        setBalance(prev => {
-          const newBalance = prev - entryFee;
-          socket?.emit('logTransaction', { userId, amount: -entryFee, type: 'bet', description: `Secured Slot #${num} (P2P ${activeRoom} Room)`, newBalance });
-          return newBalance;
-        });
+        // Server handles balance update
+        socket?.emit('syncUser', userId, username, photoUrl);
+        socket?.emit('getUserTransactions', userId);
+        
         setTransactions(prev => [
           { id: Date.now(), type: 'bet', desc: `Secured Slot #${num} (P2P ${activeRoom} Room)`, amount: -entryFee, date: 'Just now', positive: false },
           ...prev
@@ -355,7 +353,10 @@ export const WheelOfChance = React.memo(function WheelOfChance({
           .then(data => {
              if (data.success && data.token) {
                 setShareToken(data.token);
-                setShowInviteModal(true);
+                if (!sessionStorage.getItem('hasShownInviteModal_wheel')) {
+                  setShowInviteModal(true);
+                  sessionStorage.setItem('hasShownInviteModal_wheel', 'true');
+                }
              }
           })
           .catch(err => {
@@ -501,12 +502,11 @@ export const WheelOfChance = React.memo(function WheelOfChance({
         const gameTypeWithDetails = `Chance ${activeRoom} | R#${currentRoundId} | Choice:${choiceStr || '-'} | WinNum:${winNumStr}`;
 
         if (isSelfWinner) {
-          setBalance(b => {
-            const newBalance = b + payoutAmount;
-            socket?.emit('logGamePlay', { userId, gameType: gameTypeWithDetails, result: `${tierName} Win`, winAmount: payoutAmount, newBalance });
-            socket?.emit('logTransaction', { userId, amount: payoutAmount, type: 'win', description: `🏆 P2P ${tierName} Grand Victory (#${winningSectorVal})`, newBalance });
-            return newBalance;
-          });
+          // Server handles balance update and logging
+          socket?.emit('syncUser', userId, username, photoUrl);
+          socket?.emit('getUserTransactions', userId);
+          socket?.emit('getUserGameLogs', userId);
+
           setTransactions(prev => [
             { id: Date.now(), type: 'reward', desc: `🏆 P2P ${tierName} Grand Victory (#${winningSectorVal})`, amount: payoutAmount, date: 'Just now', positive: true },
             ...prev
@@ -1059,10 +1059,10 @@ export const WheelOfChance = React.memo(function WheelOfChance({
             {currentHistory.slice(0, 10).map((h, index) => (
               <div key={`${h.roundId}-${index}`} className="flex justify-between items-center text-xs bg-gray-50 dark:bg-zinc-950/50 p-2.5 rounded-xl border border-gray-100 dark:border-zinc-800/40">
                 <span className="font-black text-gray-500 dark:text-zinc-400">#{h.roundId}</span>
-                <div className="flex gap-2 font-mono font-bold">
-                  {h.winners[1] && <span className="text-yellow-400">1st-{h.winners[1]}</span>}
-                  {h.winners[2] && <span className="text-zinc-300">2nd-{h.winners[2]}</span>}
-                  {h.winners[3] && <span className="text-amber-600">3rd-{h.winners[3]}</span>}
+                <div className="flex gap-1.5 font-mono font-bold">
+                  {h.winners[1] && <span className="text-yellow-500 bg-yellow-500/10 border border-yellow-500/20 px-2 py-0.5 rounded-lg text-[10px]">1st-#{h.winners[1]}</span>}
+                  {h.winners[2] && <span className="text-zinc-400 bg-zinc-400/10 border border-zinc-400/20 px-2 py-0.5 rounded-lg text-[10px]">2nd-#{h.winners[2]}</span>}
+                  {h.winners[3] && <span className="text-amber-600 bg-amber-600/10 border border-amber-600/20 px-2 py-0.5 rounded-lg text-[10px]">3rd-#{h.winners[3]}</span>}
                 </div>
               </div>
             ))}

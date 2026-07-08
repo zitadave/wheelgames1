@@ -608,11 +608,9 @@ export const JackpotArena = React.memo(function JackpotArena({
         // Unclaim
         socket?.emit('grid_releaseSlot', { room: tier, num, userId }, (res: any) => {
            if (res?.success) {
-              setBalance(prev => {
-                const newBalance = prev + currentConfig.entry;
-                socket?.emit('logTransaction', { userId, amount: currentConfig.entry, type: 'refund', description: `Refund Spot #${num}`, newBalance });
-                return newBalance;
-              });
+              // The server handles balance updates and transaction logging
+              socket?.emit('syncUser', userId, username, photoUrl);
+              socket?.emit('getUserTransactions', userId);
               showNotification(`Unsecured Grid Position #${num}!`, 'success');
            }
         });
@@ -629,11 +627,9 @@ export const JackpotArena = React.memo(function JackpotArena({
 
     socket?.emit('grid_claimSlot', { room: tier, num, userId, username, photoUrl }, (res: any) => {
        if (res?.success) {
-          setBalance(prev => {
-            const newBalance = prev - currentConfig.entry;
-            socket?.emit('logTransaction', { userId, amount: -currentConfig.entry, type: 'bet', description: `Secured Spot #${num} in Jackpot`, newBalance });
-            return newBalance;
-          });
+          // The server handles balance updates and transaction logging
+          socket?.emit('syncUser', userId, username, photoUrl);
+          socket?.emit('getUserTransactions', userId);
           setTransactions(prev => [
             { id: Date.now(), type: 'bet', desc: `Secured Spot #${num} in Jackpot`, amount: -currentConfig.entry, date: 'Just now', positive: false },
             ...prev
@@ -649,7 +645,10 @@ export const JackpotArena = React.memo(function JackpotArena({
             .then(data => {
                if (data.success && data.token) {
                   setShareToken(data.token);
-                  setShowInviteModal(true);
+                  if (!sessionStorage.getItem('hasShownInviteModal')) {
+                    setShowInviteModal(true);
+                    sessionStorage.setItem('hasShownInviteModal', 'true');
+                  }
                }
             })
             .catch(err => {
@@ -987,10 +986,10 @@ export const JackpotArena = React.memo(function JackpotArena({
               {currentHistory.map((h, index) => (
                 <div key={`${h.roundId}-${index}`} className="flex justify-between items-center text-xs bg-gray-50 dark:bg-zinc-950/50 p-2.5 rounded-xl border border-gray-100 dark:border-zinc-800/40">
                   <span className="font-black text-gray-400 dark:text-zinc-400">#{h.roundId}</span>
-                  <div className="flex gap-2 font-mono font-bold">
-                    {h.winners[1] && <span className="text-yellow-400">1st-{h.winners[1]}</span>}
-                    {h.winners[2] && <span className="text-zinc-300">2nd-{h.winners[2]}</span>}
-                    {h.winners[3] && <span className="text-amber-600">3rd-{h.winners[3]}</span>}
+                  <div className="flex gap-1.5 font-mono font-bold">
+                    {h.winners[1] && <span className="text-yellow-500 bg-yellow-500/10 border border-yellow-500/20 px-2 py-0.5 rounded-lg text-[10px]">1st-#{h.winners[1]}</span>}
+                    {h.winners[2] && <span className="text-zinc-400 bg-zinc-400/10 border border-zinc-400/20 px-2 py-0.5 rounded-lg text-[10px]">2nd-#{h.winners[2]}</span>}
+                    {h.winners[3] && <span className="text-amber-600 bg-amber-600/10 border border-amber-600/20 px-2 py-0.5 rounded-lg text-[10px]">3rd-#{h.winners[3]}</span>}
                   </div>
                 </div>
               ))}

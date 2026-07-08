@@ -152,14 +152,11 @@ export async function processAnnouncements(bot: any) {
             `🎉 Congratulations to <b>${name}</b> for withdrawing <b>${data[0].amount.toLocaleString()} ETB</b>!\n\n` +
             `🚀 Play now, win big, and get paid instantly.\n\n` +
             `<i>Real winners, real money! See the screenshot proof.</i>`;
-          photo = "https://images.unsplash.com/photo-1526304640581-d334cdbbf45e?w=800"; // Fake receipt photo
+          photo = "https://images.unsplash.com/photo-1526304640581-d334cdbbf45e?w=800"; // Receipt photo
         } else {
-          // Fallback dummy
-          messageText = `💸 <b>Massive Withdrawal Alert!</b> 💸\n\n` +
-            `🎉 Congratulations to <b>User_***</b> for withdrawing <b>25,000 ETB</b>!\n\n` +
-            `🚀 Play now, win big, and get paid instantly.\n\n` +
-            `<i>Real winners, real money! See the screenshot proof.</i>`;
-          photo = "https://images.unsplash.com/photo-1526304640581-d334cdbbf45e?w=800";
+          // Skip if no real high withdrawal exists yet, to avoid any mock/dummy alerts
+          logBot("No actual high withdrawal records found in database. Skipping this announcement cycle.");
+          continue;
         }
       } else if (ann.type === "high_deposit") {
         // High deposit > 50000

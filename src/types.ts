@@ -33,6 +33,21 @@ export interface PlayerBet {
   partial: boolean;
 }
 
+export interface BingoRoomState {
+  id: string;
+  roundId: string;
+  status: "lobby" | "playing" | "result";
+  timeLeft: number;
+  players: Record<string, { userId: string; username: string; cards: number[]; photoUrl?: string }>;
+  calledBalls: number[];
+  currentBall?: number;
+  winners: Array<{ userId: string; username: string; type: string; winAmount: number; cardId?: number; cards?: number[] }>;
+  onlineCount: number;
+  betAmount: number;
+  jackpot?: number;
+  gameId: string;
+}
+
 export interface RoomState {
   id: string;
   roundId: number;

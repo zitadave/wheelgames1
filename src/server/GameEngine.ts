@@ -34,6 +34,7 @@ const RESULT_TIME = 6; // Show result before restarting
 class Room {
   state: RoomState;
   private timer: NodeJS.Timeout | null = null;
+  private broadcastTimeout: NodeJS.Timeout | null = null;
   private io: Server;
   private roundIdCounter = 1;
 
@@ -287,7 +288,12 @@ class Room {
   }
 
   public broadcastState() {
-    this.io.to(this.state.id).emit("roomState", this.state);
+    if (!this.broadcastTimeout) {
+      this.broadcastTimeout = setTimeout(() => {
+        this.io.to(this.state.id).emit("roomState", this.state);
+        this.broadcastTimeout = null;
+      }, 50);
+    }
   }
 
   public placeBet(userId: string, username: string, amount: number, side: Side, partial: boolean) {
@@ -391,7 +397,11 @@ export function initGameEngine(io: Server) {
             if (historyData) {
                 gridRooms[roomName].history = historyData.map(r => ({
                     roundId: r.round_number,
-                    winners: { 1: r.winner } // Need to adapt to history structure used in WheelOfChance/JackpotArena
+                    winners: { 
+                        1: r.winner,
+                        2: r.pools_even !== null && r.pools_even !== undefined && Number(r.pools_even) !== 0 ? Number(r.pools_even) : undefined,
+                        3: r.pools_odd !== null && r.pools_odd !== undefined && Number(r.pools_odd) !== 0 ? Number(r.pools_odd) : undefined
+                    }
                 }));
             }
         }
@@ -445,13 +455,13 @@ export function initGameEngine(io: Server) {
           .single();
 
         if (!user) {
-          // New player - insert with balance 0
+          // New player - insert with balance 10,000
           const { data: newUser, error: insertError } = await supabase
             .from("users")
             .insert({
               id: userId,
               username,
-              balance: 0,
+              balance: 10000,
               ...(photoUrl ? { photo_url: photoUrl } : {}),
               ...(firstName ? { first_name: firstName } : {}),
               ...(lastName ? { last_name: lastName } : {})
@@ -477,9 +487,14 @@ export function initGameEngine(io: Server) {
           
         if (user) {
            socket.emit("syncBalance", user.balance);
+        } else {
+           // Fallback for preview/local dev if Supabase is not configured or working
+           socket.emit("syncBalance", 10000);
         }
       } catch (e) {
         console.error("Sync user error:", e);
+        // Fallback for preview/local dev
+        socket.emit("syncBalance", 10000);
       }
     });
 
@@ -811,30 +826,89 @@ export function initGameEngine(io: Server) {
     socket.on("grid_gameResult", async (data: { room: string, roundId: number, winners: any }) => {
         const room = gridRooms[data.room];
         if (room) {
+            // Check if this round was already processed to prevent double payouts
+            if (room.roundId !== data.roundId) return;
+
             room.history.unshift({ roundId: data.roundId, winners: data.winners });
             if (room.history.length > 10) room.history.pop();
             
-            // Save to Supabase
+            // Save to Supabase and handle payouts
             try {
                 const { supabase } = await import("./supabase.js");
                 if (supabase) {
+                    const winnerNum = data.winners[1] || data.winners.first;
+                    const secondWinner = data.winners[2] || data.winners.second;
+                    const thirdWinner = data.winners[3] || data.winners.third;
                     await supabase.from("rounds").insert({
                         round_number: data.roundId,
-                        winner: data.winners[1] || data.winners.first, // Adapt structure
+                        winner: winnerNum,
+                        pools_even: secondWinner || null,
+                        pools_odd: thirdWinner || null,
                         room_id: data.room
                     });
+
+                    // Payout logic
+                    const config = {
+                      '1-10': { slots: 10, entry: 1000, p1: 9000 },
+                      '1-20': { slots: 20, entry: 1000, p1: 18000 },
+                      'mini': { slots: 50, entry: 2000, p1: 72000, p2: 12600, p3: 5400 },
+                      'grand': { slots: 100, entry: 2000, p1: 144000, p2: 25200, p3: 10800 }
+                    };
+                    const roomConfig = (config as any)[data.room];
+
+                    if (roomConfig) {
+                        const winNums = [data.winners[1] || data.winners.first, data.winners[2] || data.winners.second, data.winners[3] || data.winners.third].filter(Boolean);
+                        
+                        for (let i = 0; i < winNums.length; i++) {
+                            const wNum = winNums[i];
+                            const winner = room.claimedSlots[wNum];
+                            if (winner) {
+                                let prize = 0;
+                                if (data.room === 'mini' || data.room === 'grand') {
+                                    if (i === 0) prize = roomConfig.p1;
+                                    else if (i === 1) prize = roomConfig.p2;
+                                    else prize = roomConfig.p3;
+                                } else {
+                                    prize = roomConfig.p1;
+                                }
+
+                                if (prize > 0) {
+                                    const { data: user } = await supabase.from("users").select("balance").eq("id", winner.userId).single();
+                                    if (user) {
+                                        const newBalance = user.balance + prize;
+                                        await supabase.from("users").update({ balance: newBalance }).eq("id", winner.userId);
+                                        await supabase.from("transactions").insert({
+                                           user_id: winner.userId,
+                                           amount: prize,
+                                           type: "win",
+                                           description: `Win #${wNum} in ${data.room} (Place ${i+1})`
+                                        });
+                                        io.to(`user_${winner.userId}`).emit("syncBalance", newBalance);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             } catch (err) {
-                console.error("Failed to save grid game result to Supabase:", err);
+                console.error("Failed to save grid game result or payout to Supabase:", err);
             }
             
             // Broadcast the updated history
             io.to(data.room).emit("grid_state", room);
+            
+            // Increment roundId for next game
+            room.roundId += 1;
+            room.claimedSlots = {};
+            delete room.winners;
         }
     });
 
     socket.on("grid_claimSlot", async (data: { room: string, num: number, userId: string, username: string, photoUrl?: string }, callback) => {
       // Balance and authentication check (unauthenticated or 0.00 ETB balance users cannot claim slots)
+      const room = gridRooms[data.room];
+      const entryFee = data.room === '1-10' ? 1000 : data.room === '1-20' ? 1000 : data.room === 'mini' ? 2000 : 2000;
+
       try {
         const { supabase } = await import("./supabase.js");
         if (!supabase || !data.userId) {
@@ -843,18 +917,23 @@ export function initGameEngine(io: Server) {
         }
 
         const { data: user } = await supabase.from("users").select("balance").eq("id", data.userId).single();
-        if (!user || Number(user.balance) <= 0) {
-          if (callback) callback({ success: false, message: "Insufficient balance (0.00 ETB) or account not found." });
+        if (!user || Number(user.balance) < entryFee) {
+          if (callback) callback({ success: false, message: `Insufficient balance (${entryFee} ETB required) or account not found.` });
           return;
         }
-      } catch (err: any) {
-        if (callback) callback({ success: false, message: "Authentication validation failed." });
-        return;
-      }
 
-      const room = gridRooms[data.room];
-      if (room) {
-        if (!room.claimedSlots[data.num]) {
+        if (room && !room.claimedSlots[data.num]) {
+           // Deduct balance
+           const newBalance = user.balance - entryFee;
+           await supabase.from("users").update({ balance: newBalance }).eq("id", data.userId);
+           await supabase.from("transactions").insert({
+              user_id: data.userId,
+              amount: -entryFee,
+              type: "bet",
+              description: `Secured Slot #${data.num} in ${data.room}`
+           });
+           io.to(`user_${data.userId}`).emit("syncBalance", newBalance);
+
            room.claimedSlots[data.num] = { isSelf: false, userId: data.userId, username: data.username, photoUrl: data.photoUrl };
            
            const maxSlots = data.room === '1-10' ? 10 : data.room === '1-20' ? 20 : data.room === 'mini' ? 50 : 100;
@@ -867,12 +946,37 @@ export function initGameEngine(io: Server) {
         } else {
            if (callback) callback({ success: false, message: "Slot already taken" });
         }
+      } catch (err: any) {
+        if (callback) callback({ success: false, message: "Authentication validation failed." });
+        return;
       }
     });
 
-    socket.on("grid_releaseSlot", (data: { room: string, num: number, userId: string }, callback) => {
+    socket.on("grid_releaseSlot", async (data: { room: string, num: number, userId: string }, callback) => {
       const room = gridRooms[data.room];
+      const entryFee = data.room === '1-10' ? 1000 : data.room === '1-20' ? 1000 : data.room === 'mini' ? 2000 : 2000;
+
       if (room && room.claimedSlots[data.num]?.userId === data.userId) {
+         try {
+           const { supabase } = await import("./supabase.js");
+           if (supabase) {
+             const { data: user } = await supabase.from("users").select("balance").eq("id", data.userId).single();
+             if (user) {
+                const newBalance = user.balance + entryFee;
+                await supabase.from("users").update({ balance: newBalance }).eq("id", data.userId);
+                await supabase.from("transactions").insert({
+                   user_id: data.userId,
+                   amount: entryFee,
+                   type: "refund",
+                   description: `Refund Slot #${data.num} (${data.room})`
+                });
+                io.to(`user_${data.userId}`).emit("syncBalance", newBalance);
+             }
+           }
+         } catch (e) {
+           console.error("Refund error:", e);
+         }
+
          delete room.claimedSlots[data.num];
          delete room.winners;
          io.to(data.room).emit("grid_state", room);

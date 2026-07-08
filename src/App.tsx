@@ -5,7 +5,8 @@ import { Wheel } from './components/Wheel';
 import { JackpotArena } from './components/JackpotArena';
 import { WheelOfChance } from './components/WheelOfChance';
 import { Leaderboard } from './components/Leaderboard';
-import { Users, Clock, History, AlertCircle, Coins, Moon, Sun, Settings, X, HelpCircle, Search, Trophy, Gamepad2, TrendingUp, Wallet, User, Plus, ArrowUpRight, ArrowDownLeft, Copy, Check, ChevronRight, Dices, Binary, RefreshCw, Info, Award } from 'lucide-react';
+import { BingoGame } from './components/BingoGame';
+import { ChevronLeft, Users, Clock, History, AlertCircle, Coins, Moon, Sun, Settings, X, HelpCircle, Search, Trophy, Gamepad2, TrendingUp, Wallet, User, Plus, ArrowUpRight, ArrowDownLeft, Copy, Check, ChevronRight, Dices, Binary, RefreshCw, Info, Award, Grid3X3, Volume2, VolumeX } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { playWin, playLoss, suspendAudio, resumeAudio } from './utils/sound';
 import { triggerHaptic } from './utils/haptic';
@@ -35,18 +36,48 @@ export default function App() {
   const [socket, setSocket] = useState<Socket | null>(null);
   
   const [userId] = useState(() => tgUser?.id ? tgUser.id.toString() : 'user_' + Math.floor(Math.random() * 100000));
+  const [roomState, setRoomState] = useState<RoomState | null>(() => {
+    const saved = sessionStorage.getItem('roomState');
+    return saved ? JSON.parse(saved) : null;
+  });
+  const [bingoRoomState, setBingoRoomState] = useState<any>(null);
+  const [bingoRoomsMeta, setBingoRoomsMeta] = useState<any>(null);
+
+  const [displayTime, setDisplayTime] = useState(0);
+
+
+  // Smooth local timer for Even/Odd
+  useEffect(() => {
+    if (roomState?.status === 'betting' || roomState?.status === 'balancing' || roomState?.status === 'result') {
+      setDisplayTime(roomState.timeLeft);
+    }
+  }, [roomState?.timeLeft, roomState?.status]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setDisplayTime(prev => Math.max(0, prev - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Smooth local timer for Bingo
+
+
   const [username] = useState(() => tgUser?.username || tgUser?.first_name || 'Player_' + Math.floor(Math.random() * 1000));
   const [photoUrl] = useState(() => tgUser?.photo_url || null);
   const [firstName] = useState(() => tgUser?.first_name || '');
   const [lastName] = useState(() => tgUser?.last_name || '');
 
-  const [balance, setBalance] = useState(0); // 0 start
+  const [balance, setBalance] = useState<number | null>(null);
+  const [isBalanceSynced, setIsBalanceSynced] = useState(false);
   const [currentRoom, setCurrentRoom] = useState<string>('Main-Room');
+  const [selectedBingoRoomId, setSelectedBingoRoomId] = useState<string | null>(null);
+  const selectedBingoRoomIdRef = useRef(selectedBingoRoomId);
+  useEffect(() => {
+    selectedBingoRoomIdRef.current = selectedBingoRoomId;
+  }, [selectedBingoRoomId]);
+  
   const [roomsStatus, setRoomsStatus] = useState<Record<string, { status: string, even: number, odd: number }>>({});
-  const [roomState, setRoomState] = useState<RoomState | null>(() => {
-    const saved = sessionStorage.getItem('roomState');
-    return saved ? JSON.parse(saved) : null;
-  });
 
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [failedBet, setFailedBet] = useState<{ side: Side; amount: number } | null>(null);
@@ -56,6 +87,18 @@ export default function App() {
   const showNotification = React.useCallback((message: string, type: 'success' | 'error' | 'info' = 'info') => {
     setNotification({ message, type });
   }, []);
+
+  useEffect(() => {
+    if (socket) {
+      socket.on('syncBalance', (newBalance: number) => {
+        setBalance(newBalance);
+        setIsBalanceSynced(true);
+      });
+      return () => {
+        socket.off('syncBalance');
+      };
+    }
+  }, [socket]);
 
   const handleTriggerFlow = async (type: 'deposit' | 'withdraw') => {
     const tgUsername = botUsername || 'YOUR_BOT_USERNAME';
@@ -134,19 +177,11 @@ export default function App() {
   
   const [soundTicks, setSoundTicks] = useState<boolean>(true);
   const [soundAlerts, setSoundAlerts] = useState<boolean>(true);
+  const [bingoSoundEnabled, setBingoSoundEnabled] = useState<boolean>(true);
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const soundAlertsRef = useRef(true);
   
-  const [showOnboarding, setShowOnboarding] = useState<boolean>(() => {
-    return localStorage.getItem('onboardingSeen') !== 'true';
-  });
-
-  const [isPlayersDrawerOpen, setIsPlayersDrawerOpen] = useState<boolean>(false);
-  const [isEvenOddInfoOpen, setIsEvenOddInfoOpen] = useState<boolean>(false);
-  const [searchQuery, setSearchQuery] = useState<string>('');
-
-  // Bottom Navigation & Mini Pages State
-  const [activeTab, setActiveTab] = useState<'even_odd' | 'jackpot' | 'chance' | 'profile'>('even_odd');
+  const [activeTab, setActiveTab] = useState<'even_odd' | 'jackpot' | 'chance' | 'bingo' | 'profile'>('even_odd');
   const activeTabRef = useRef(activeTab);
   useEffect(() => {
     activeTabRef.current = activeTab;
@@ -192,6 +227,9 @@ export default function App() {
   const [isWalletOpen, setIsWalletOpen] = useState<boolean>(false);
   const [ledgerTab, setLedgerTab] = useState<'play' | 'transactions'>('play');
   const [isJackpotTheaterMode, setIsJackpotTheaterMode] = useState<boolean>(false);
+  const [isPlayersDrawerOpen, setIsPlayersDrawerOpen] = useState<boolean>(false);
+  const [isEvenOddInfoOpen, setIsEvenOddInfoOpen] = useState<boolean>(false);
+  const [searchQuery, setSearchQuery] = useState<string>('');
   const [transactions, setTransactions] = useState<any[]>([]);
   const [gameHistory, setGameHistory] = useState<any[]>([]);
   const [historyFilter, setHistoryFilter] = useState<string>('all');
@@ -256,7 +294,7 @@ export default function App() {
     }
   }, [activeTab]);
 
-  const totalActivePlayersCount = roomState?.onlineCount || 0;
+  const totalActivePlayersCount = activeTab === 'bingo' ? (bingoRoomState?.onlineCount || 0) : (roomState?.onlineCount || 0);
 
   const vipPlayersList = React.useMemo(() => {
     const realPlayers = roomState?.players || {};
@@ -293,38 +331,6 @@ export default function App() {
       });
     }
 
-    // Fill remaining online count using high-fidelity spectator records so list length matches totalActivePlayersCount
-    const remainingCount = totalActivePlayersCount - list.length;
-    if (remainingCount > 0) {
-      const mockSpectators = [
-        { name: "Almaz_K", photo: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=150&q=80" },
-        { name: "Dawit_Y", photo: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&q=80" },
-        { name: "Makeda_Gold", photo: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80" },
-        { name: "Selam_Ethio", photo: "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=150&q=80" },
-        { name: "Yonas_T", photo: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=150&q=80" },
-        { name: "Desta_M", photo: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=150&q=80" },
-        { name: "Teddy_P", photo: "https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?auto=format&fit=crop&w=150&q=80" },
-        { name: "Hirut_S", photo: "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=150&q=80" },
-        { name: "Bereket_A", photo: "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?auto=format&fit=crop&w=150&q=80" },
-        { name: "Tewodros_F", photo: "https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?auto=format&fit=crop&w=150&q=80" }
-      ];
-      for (let i = 0; i < remainingCount; i++) {
-        const mockId = `mock_user_${i}_${roomState?.roundId || 0}`;
-        const itemIdx = (i + (roomState?.roundId || 0)) % mockSpectators.length;
-        const specObj = mockSpectators[itemIdx];
-        list.push({
-          id: mockId,
-          username: specObj.name,
-          photoUrl: specObj.photo,
-          amount: 0,
-          side: undefined,
-          badge: "Spectator VIP",
-          joinTime: "Online",
-          isReal: false
-        });
-      }
-    }
-
     return list;
   }, [roomState?.roundId, roomState?.players, totalActivePlayersCount, userId, username, photoUrl]);
   
@@ -338,9 +344,10 @@ export default function App() {
 
   useEffect(() => {
     const newSocket = io(SOCKET_URL, {
-      transports: ['websocket', 'polling'],
-      reconnectionAttempts: 5,
-      timeout: 10000
+      transports: ['websocket'],
+      upgrade: false,
+      reconnectionAttempts: 10,
+      timeout: 5000
     });
     setSocket(newSocket);
 
@@ -482,6 +489,16 @@ export default function App() {
 
   useEffect(() => {
     if (!socket) return;
+
+    socket.on('bingo_rooms_meta', (meta: any) => {
+      setBingoRoomsMeta(meta);
+    });
+
+    socket.on('bingo_state', (state: any) => {
+      if (activeTabRef.current === 'bingo' && state && state.id === selectedBingoRoomIdRef.current) {
+        setBingoRoomState(state);
+      }
+    });
     
     socket.on('roomState', (state: RoomState) => {
       setRoomState(state);
@@ -504,60 +521,25 @@ export default function App() {
           const myBet = state.players[userId];
           if (myBet) {
              const isEven = state.winner % 2 === 0;
-             const mySideWon = (isEven && myBet.side === 'even') || (!isEven && myBet.side === 'odd');
-             let netWin = -myBet.amount;
-             const choiceStr = myBet.side === 'even' ? 'ሞላ (Even)' : 'ጎደለ (Odd)';
-             const winNumStr = `${state.winner} (${isEven ? 'Even' : 'Odd'})`;
+             const isEvenWinner = state.winner % 2 === 0;
+             const mySideWon = (isEvenWinner && myBet.side === 'even') || (!isEvenWinner && myBet.side === 'odd');
+             const isActive = activeTabRef.current === 'even_odd';
+             
              if (mySideWon) {
-                // Determine net win based on fees
-                const feeRate = myBet.amount > 10000 ? 0.05 : 0.10;
-                netWin = myBet.amount * (1 - feeRate);
-                setBalance(b => {
-                  const newBalance = b + myBet.amount + netWin;
-                  socket?.emit('logGamePlay', { userId, gameType: `Even/Odd | R#${state.roundId} | Choice:${choiceStr} | WinNum:${winNumStr}`, result: 'Win', winAmount: myBet.amount + netWin, newBalance });
-                  socket?.emit('logTransaction', { userId, amount: myBet.amount + netWin, type: 'win', description: 'Even/Odd Win', newBalance });
-                  return newBalance;
-                });
-                setGameHistory(prev => [
-                  {
-                    id: `R#${state.roundId}`,
-                    type: 'Even/Odd',
-                    bet: myBet.amount,
-                    numbers: choiceStr,
-                    winningNums: winNumStr,
-                    date: new Date().toLocaleString(),
-                    result: 'Win',
-                    change: myBet.amount + netWin,
-                    status: 'Completed'
-                  },
-                  ...prev
-                ]);
                 if (soundAlertsRef.current) {
                    if (isActive) playWin();
                  }
              } else {
-                setBalance(b => {
-                  socket?.emit('logGamePlay', { userId, gameType: `Even/Odd | R#${state.roundId} | Choice:${choiceStr} | WinNum:${winNumStr}`, result: 'Loss', winAmount: 0, newBalance: b });
-                  return b;
-                });
-                setGameHistory(prev => [
-                  {
-                    id: `R#${state.roundId}`,
-                    type: 'Even/Odd',
-                    bet: myBet.amount,
-                    numbers: choiceStr,
-                    winningNums: winNumStr,
-                    date: new Date().toLocaleString(),
-                    result: 'Loss',
-                    change: 0,
-                    status: 'Completed'
-                  },
-                  ...prev
-                ]);
                 if (soundAlertsRef.current) {
                    if (isActive) playLoss();
                  }
              }
+             
+             // The server handles balance updates and transaction logging
+             // Client just needs to refresh its view
+             socket?.emit('syncUser', userId, username, photoUrl);
+             socket?.emit('getUserTransactions', userId);
+             socket?.emit('getUserGameLogs', userId);
           }
         }
       } else {
@@ -567,15 +549,13 @@ export default function App() {
     });
 
     socket.on('refund', (amount: number) => {
-      setBalance(b => {
-        const newBalance = b + amount;
-        socket.emit('logTransaction', { userId, amount: amount, type: 'refund', description: 'Partial Bet Refund', newBalance });
-        return newBalance;
-      });
+      socket.emit('syncUser', userId, username, photoUrl);
+      showNotification(`Bet partially refunded: ${amount.toLocaleString()} ETB`, 'info');
     });
 
     return () => {
       socket.off('roomState');
+      socket.off('bingo_state');
       socket.off('refund');
     };
   }, [socket, showResult, lastWinner, userId]);
@@ -654,17 +634,16 @@ export default function App() {
       setIsPlacingBet(false);
 
       if (res && res.success) {
-         setBalance(b => {
-           const newBalance = b - diff;
-           socket.emit('logTransaction', { userId, amount: -diff, type: 'bet', description: 'Even/Odd Bet', newBalance });
-           return newBalance;
-         });
          setPulseSide(side);
          setTimeout(() => setPulseSide(null), 300);
          if (window.Telegram?.WebApp?.HapticFeedback) {
             window.Telegram.WebApp.HapticFeedback.impactOccurred('medium');
          }
          showNotification(`Successfully placed ${targetAmount.toLocaleString()} bet!`, "success");
+         
+         // Fetch latest balance and history from server immediately
+         socket.emit('syncUser', userId, username, photoUrl);
+         socket.emit('getUserTransactions', userId);
       } else {
          const errMsg = res?.message || "Server failed to process bet.";
          showNotification(errMsg, "error");
@@ -683,7 +662,7 @@ export default function App() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (showOnboarding || showSettings) return;
+      if (showSettings) return;
 
       if (document.activeElement?.tagName === 'INPUT') {
         if (e.key === 'Enter') {
@@ -714,9 +693,17 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showOnboarding, showSettings]);
+  }, [showSettings]);
 
   const isSoftClosed = roomState?.status === 'betting' && roomState.timeLeft < 5;
+
+  const getDerashAmount = () => {
+    if (!bingoRoomState) return 0;
+    if (bingoRoomState.jackpot !== undefined) return bingoRoomState.jackpot;
+    const pCount = Object.keys(bingoRoomState.players || {}).length;
+    const bet = bingoRoomState.betAmount || 10;
+    return Math.floor(pCount * bet * 0.8);
+  };
 
   return (
     <div className={isDarkMode ? "dark" : ""}>
@@ -725,54 +712,139 @@ export default function App() {
         {/* Top Header Panel */}
         {!isJackpotTheaterMode && (
           <header className="flex justify-between items-center px-4 py-2 bg-white/95 dark:bg-gray-900/95 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 shrink-0 transition-colors duration-300 z-40 fixed top-0 left-0 right-0 w-full max-w-md mx-auto">
-            {/* Top-Left: Wallet Balance Button (Click to open Wallet drawer) */}
-            <button
-              onClick={() => setIsWalletOpen(true)}
-              className="flex items-center gap-1.5 bg-yellow-500/10 hover:bg-yellow-500/20 dark:bg-yellow-500/5 dark:hover:bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 border border-yellow-500/30 px-3 py-1 rounded-full text-xs font-bold transition-all active:scale-95 cursor-pointer"
-            >
-              <Coins className="w-3.5 h-3.5 text-yellow-500" />
-              <span className="font-mono font-black">{balance.toLocaleString()}</span>
-            </button>
+            {activeTab === 'bingo' && selectedBingoRoomId && bingoRoomState?.status === 'lobby' ? (
+              // BINGO LOBBY HEADER: Equal space between balance, timer, label, and profile
+              <div className="flex items-center justify-between w-full">
+                <button 
+                  onClick={() => {
+                    socket?.emit('bingo_leave', { roomId: selectedBingoRoomId, userId });
+                    setSelectedBingoRoomId(null);
+                    setBingoRoomState(null);
+                  }}
+                  className="flex items-center justify-center w-7 h-7 rounded-full bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-purple-500 active:scale-95 transition-transform border border-gray-200 dark:border-gray-700 shrink-0"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
 
-            {/* Center: Timer / Live Status (shown for even/odd page only) */}
-            <div className="absolute left-1/2 -translate-x-1/2 flex flex-col items-center justify-center">
-              {activeTab === 'even_odd' && roomState?.status !== 'spinning' && roomState?.status !== 'result' && (
-                <div className="flex items-center gap-1 bg-blue-50 dark:bg-blue-950/40 px-3 py-1 rounded-full border border-blue-100 dark:border-blue-900/50 animate-in fade-in duration-300">
-                  <Clock className="w-3 h-3 text-blue-500 animate-pulse" />
-                  <span className={`font-mono text-sm font-black tracking-tight ${roomState?.timeLeft && roomState.timeLeft < 10 ? 'text-red-500 animate-pulse' : 'text-blue-600 dark:text-blue-400'}`}>
-                    00:{roomState?.timeLeft.toString().padStart(2, '0') || '00'}
+                <button
+                  onClick={() => setIsWalletOpen(true)}
+                  className="flex items-center gap-1 bg-yellow-500/10 hover:bg-yellow-500/20 dark:bg-yellow-500/5 dark:hover:bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 border border-yellow-500/30 px-1.5 py-1 rounded-full text-[11px] font-bold transition-all active:scale-95 cursor-pointer shrink-0"
+                >
+                  <Coins className="w-3 h-3 text-yellow-500 shrink-0" />
+                  <span className="font-mono font-black">{balance === null ? '...' : balance.toLocaleString()}</span>
+                </button>
+
+                <div className="flex items-center gap-1.5 bg-orange-500/10 px-2 py-1.5 rounded-full border border-orange-500/30 shadow-lg shadow-orange-500/10 shrink-0">
+                   <Clock className="w-3.5 h-3.5 text-orange-500 animate-pulse shrink-0" />
+                   <span className={`font-mono text-[14px] font-black tracking-tighter ${(bingoRoomState?.timeLeft || 0) < 10 ? 'text-red-500 animate-pulse' : 'text-orange-500'}`}>
+                    {(bingoRoomState?.timeLeft || 0)}s
                   </span>
                 </div>
-              )}
-            </div>
 
-            {/* Top-Right: Live counting badge & Profile */}
-            <div className="flex items-center gap-2">
-              <button 
-                id="players-portal-btn-top"
-                onClick={() => setIsPlayersDrawerOpen(true)}
-                className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-100 rounded-full px-2.5 py-1.5 border border-gray-200 dark:border-gray-700 text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer animate-in fade-in duration-300"
-              >
-                <span className="flex h-2 w-2 relative">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-                </span>
-                <Users className="w-3.5 h-3.5 text-blue-500 dark:text-blue-400" />
-                <span className="font-mono tracking-tight font-bold">{totalActivePlayersCount}</span>
-              </button>
-              
-              {/* Profile Icon Button */}
-              <button
-                onClick={() => setActiveTab('profile')}
-                className="p-0 rounded-full bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-700 transition-all active:scale-95 cursor-pointer relative w-8 h-8 flex items-center justify-center overflow-hidden"
-              >
-                {photoUrl ? (
-                   <img src={photoUrl} alt="Avatar" className="w-full h-full object-cover rounded-full" referrerPolicy="no-referrer" />
-                ) : (
-                   <User className="w-4 h-4" />
-                )}
-              </button>
-            </div>
+                <div className="text-[11px] font-black text-orange-400 uppercase tracking-widest px-1.5 py-1 bg-orange-500/10 border border-orange-500/30 rounded-lg whitespace-nowrap shrink-0">
+                  {selectedBingoRoomId === 'bingo-10' ? 'ባለ 10' : 'ባለ 20'}
+                </div>
+
+                <button
+                  onClick={() => setActiveTab('profile')}
+                  className="p-0 rounded-full bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-700 transition-all active:scale-95 cursor-pointer relative w-7 h-7 flex items-center justify-center overflow-hidden shrink-0"
+                >
+                  {photoUrl ? (
+                    <img src={photoUrl} alt="Avatar" className="w-full h-full object-cover rounded-full" referrerPolicy="no-referrer" />
+                  ) : (
+                    <User className="w-3.5 h-3.5" />
+                  )}
+                </button>
+              </div>
+            ) : (
+              // DEFAULT HEADER FOR OTHER TABS
+              <>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setIsWalletOpen(true)}
+                    className="flex items-center gap-1.5 bg-yellow-500/10 hover:bg-yellow-500/20 dark:bg-yellow-500/5 dark:hover:bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 border border-yellow-500/30 px-3 py-1.5 rounded-full text-xs font-bold transition-all active:scale-95 cursor-pointer shrink-0"
+                  >
+                    <Coins className="w-3.5 h-3.5 text-yellow-500" />
+                    <span className="font-mono font-black">{balance === null ? '...' : balance.toLocaleString()}</span>
+                  </button>
+
+                  {activeTab === 'bingo' && bingoRoomState && !(!selectedBingoRoomId) && (
+                    <div className="flex flex-col items-center justify-center bg-green-500/10 dark:bg-green-500/5 text-green-600 dark:text-green-400 border border-green-500/30 rounded-lg py-1 px-2 select-none shrink-0 text-[9px] font-bold leading-none gap-1 animate-in fade-in duration-300 w-[85px]">
+                      <span className="text-[9px] font-black tracking-wider text-green-600/70 dark:text-green-400/70 uppercase font-bold">DERASH</span>
+                      <div className="border-t border-green-500/20 pt-1 w-full text-center">
+                        <span className="font-mono font-black text-[10px] text-green-600 dark:text-green-400">
+                          {getDerashAmount().toLocaleString()}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="absolute left-1/2 -translate-x-1/2 flex flex-col items-center justify-center">
+                  {activeTab === 'even_odd' && roomState?.status !== 'spinning' && roomState?.status !== 'result' && (
+                    <div className="flex items-center gap-1 bg-blue-50 dark:bg-blue-950/40 px-3 py-1 rounded-full border border-blue-100 dark:border-blue-900/50 animate-in fade-in duration-300">
+                      <Clock className="w-3 h-3 text-blue-500 animate-pulse" />
+                      <span className={`font-mono text-sm font-black tracking-tight ${displayTime < 10 ? 'text-red-500 animate-pulse' : 'text-blue-600 dark:text-blue-400'}`}>
+                        00:{displayTime.toString().padStart(2, '0')}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {activeTab === 'bingo' ? (
+                    bingoRoomState && (bingoRoomState.status === 'playing' || bingoRoomState.status === 'result') && !(!selectedBingoRoomId) && (
+                      <div className="flex flex-col items-center justify-center bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-700 rounded-lg py-1 px-2 select-none shrink-0 text-[9px] font-bold leading-none gap-1 animate-in fade-in duration-300 w-[85px]">
+                        <button 
+                          id="players-portal-btn-top"
+                          onClick={() => setIsPlayersDrawerOpen(true)}
+                          className="flex items-center justify-center gap-1 font-black text-orange-500 active:scale-95 transition-transform w-full"
+                        >
+                          <span>PLAYERS</span>
+                          <span className="font-mono font-black text-gray-800 dark:text-gray-100">{totalActivePlayersCount}</span>
+                        </button>
+                        <div className="flex items-center justify-center gap-1 font-black text-purple-500 border-t border-gray-300/30 dark:border-gray-700/30 pt-1 w-full">
+                          <span>CALLED</span>
+                          <span className="font-mono font-black text-gray-800 dark:text-gray-100">{bingoRoomState.calledBalls?.length || 0}</span>
+                        </div>
+                      </div>
+                    )
+                  ) : (
+                    <button 
+                      id="players-portal-btn-top"
+                      onClick={() => setIsPlayersDrawerOpen(true)}
+                      className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-100 rounded-full px-2.5 py-1.5 border border-gray-200 dark:border-gray-700 text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer animate-in fade-in duration-300"
+                    >
+                      <Users className="w-3.5 h-3.5 text-blue-500 dark:text-blue-400" />
+                      <span className="font-mono tracking-tight font-bold">{totalActivePlayersCount}</span>
+                    </button>
+                  )}
+                  
+                  {activeTab === 'bingo' && bingoRoomState && (bingoRoomState.status === 'playing' || bingoRoomState.status === 'result') && !(!selectedBingoRoomId) && (
+                    <button
+                      onClick={() => setBingoSoundEnabled(!bingoSoundEnabled)}
+                      className="p-1.5 rounded-full bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-green-500 hover:text-green-600 dark:text-green-400 dark:hover:text-green-300 border border-gray-200 dark:border-gray-700 transition-all active:scale-95 cursor-pointer flex items-center justify-center w-8 h-8 shrink-0 select-none animate-in fade-in duration-300"
+                      title={bingoSoundEnabled ? "Mute Caller Voice" : "Unmute Caller Voice"}
+                    >
+                      {bingoSoundEnabled ? <Volume2 className="w-4.5 h-4.5" /> : <VolumeX className="w-4.5 h-4.5 text-gray-400" />}
+                    </button>
+                  )}
+                  
+                  {!(activeTab === 'bingo' && selectedBingoRoomId && bingoRoomState?.status !== 'lobby') && (
+                    <button
+                      onClick={() => setActiveTab('profile')}
+                      className="p-0 rounded-full bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-700 transition-all active:scale-95 cursor-pointer relative w-8 h-8 flex items-center justify-center overflow-hidden shrink-0"
+                    >
+                      {photoUrl ? (
+                        <img src={photoUrl} alt="Avatar" className="w-full h-full object-cover rounded-full" referrerPolicy="no-referrer" />
+                      ) : (
+                        <User className="w-4 h-4" />
+                      )}
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
           </header>
         )}
 
@@ -796,7 +868,7 @@ export default function App() {
         )}
 
         {/* Scrollable Main Content Frame */}
-        <main className={`flex-1 overflow-y-auto overflow-x-hidden relative z-10 flex flex-col px-4 transition-all duration-300 ${isJackpotTheaterMode ? 'pt-4 pb-4' : 'pt-[52px] pb-[62px]'}`}>
+        <main className={`flex-1 min-h-0 relative z-10 flex flex-col transition-all duration-300 ${activeTab === 'bingo' ? 'px-0 overflow-hidden pb-14' : 'px-4 overflow-y-auto overflow-x-hidden pb-[62px]'} ${isJackpotTheaterMode ? 'pt-4 pb-4' : 'pt-[52px]'}`}>
             
             {/* TAB 1: Game Arena (Even/Odd) */}
             <div
@@ -1035,104 +1107,157 @@ export default function App() {
                 />
             </div>
 
+            {/* TAB 3: Traditional Bingo Game */}
+            <div className={`flex-1 min-h-0 overflow-hidden flex-col ${activeTab === 'bingo' ? 'flex' : 'hidden'}`}>
+                <BingoGame
+                  bingoRoomsMeta={bingoRoomsMeta}
+                  selectedRoomId={selectedBingoRoomId}
+                  onRoomSelect={setSelectedBingoRoomId}
+                  socket={socket}
+                  userId={userId}
+                  username={username}
+                  photoUrl={photoUrl}
+                  balance={balance || 0}
+                  showNotification={showNotification}
+                  roomState={bingoRoomState}
+                  displayTime={(bingoRoomState?.timeLeft || 0)}
+                  soundEnabled={bingoSoundEnabled}
+                  setSoundEnabled={setBingoSoundEnabled}
+                  isActive={activeTab === 'bingo'}
+                />
+            </div>
+
             {/* TAB 4: Profile Page */}
             <div className={`flex-1 p-4 space-y-4 ${activeTab === 'profile' ? 'block' : 'hidden'}`}>
-                {/* User Info Card */}
-                <div className="relative overflow-hidden bg-gradient-to-br from-blue-600 to-blue-800 rounded-3xl p-6 text-center shadow-lg shadow-blue-500/20">
-                  <div className="absolute top-0 right-0 p-4 opacity-10">
-                     <div className="w-24 h-24 bg-white rounded-full blur-2xl"></div>
+                {/* User Info Row */}
+                <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800/60 rounded-3xl p-5 shadow-sm transition-all duration-300 flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-4 min-w-0">
+                    <div className="relative w-16 h-16 rounded-full bg-blue-100 dark:bg-blue-950/50 p-1 flex items-center justify-center border border-gray-150 dark:border-gray-800/80 shrink-0">
+                      {photoUrl ? (
+                        <img src={photoUrl} alt="Avatar" className="w-full h-full object-cover rounded-full" referrerPolicy="no-referrer" />
+                      ) : (
+                        <span className="text-2xl font-black text-blue-600 dark:text-blue-400">{username.charAt(0).toUpperCase()}</span>
+                      )}
+                      <div className="absolute bottom-0 right-0 bg-green-500 w-4.5 h-4.5 rounded-full border-[3px] border-white dark:border-gray-900 shadow-sm" />
+                    </div>
+                    <div className="min-w-0">
+                      <h2 className="text-lg font-black text-gray-900 dark:text-white tracking-tight truncate">
+                        {firstName || lastName ? `${firstName} ${lastName}`.trim() : username}
+                      </h2>
+                      <p className="text-gray-400 dark:text-gray-500 text-xs font-semibold">@{username}</p>
+                    </div>
                   </div>
-                  <div className="relative mx-auto w-20 h-20 rounded-full bg-white/20 p-1 flex items-center justify-center shadow-inner backdrop-blur-sm">
-                    {photoUrl ? (
-                      <img src={photoUrl} alt="Avatar" className="w-full h-full object-cover rounded-full" referrerPolicy="no-referrer" />
-                    ) : (
-                      <span className="text-3xl font-black text-white">{username.charAt(0).toUpperCase()}</span>
-                    )}
-                    <div className="absolute bottom-1 right-1 bg-green-400 w-5 h-5 rounded-full border-4 border-blue-700 z-10" />
-                  </div>
-                  <h2 className="text-xl font-black text-white mt-4">
-                    {firstName || lastName ? `${firstName} ${lastName}`.trim() : username}
-                  </h2>
-                  
-                  {/* Account id and quick copy button */}
-                  <div className="flex items-center justify-center gap-2 mt-2 bg-black/20 rounded-full py-1 px-3 mx-auto w-fit">
-                    <span className="text-[10px] font-bold text-blue-100 font-mono tracking-wide">ID: {userId.slice(5, 18).toUpperCase()}</span>
+
+                  {/* ID badge and copy button */}
+                  <div className="bg-gray-50 dark:bg-gray-800/40 border border-gray-100 dark:border-gray-800/50 rounded-2xl py-2 px-3 flex items-center gap-2 shrink-0">
+                    <span className="text-[10px] font-bold text-gray-500 dark:text-gray-400 font-mono tracking-wider">ID: {userId.slice(5, 15).toUpperCase()}</span>
                     <button
                       onClick={() => {
                         navigator.clipboard.writeText(userId);
                         setCopiedId(true);
                         setTimeout(() => setCopiedId(false), 2000);
+                        showNotification("Copied User ID!", "success");
                       }}
-                      className="p-1 hover:bg-white/20 rounded-full transition-colors text-blue-200 hover:text-white"
+                      className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-all text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 active:scale-95 cursor-pointer"
+                      title="Copy Full ID"
                     >
-                      {copiedId ? <Check className="w-3 h-3 text-green-300" /> : <Copy className="w-3 h-3" />}
+                      {copiedId ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Unified Wallet Balance Widget */}
+                <div className="bg-gradient-to-br from-blue-600 to-indigo-700 rounded-3xl p-6 text-white shadow-xl shadow-blue-600/15 relative overflow-hidden">
+                  {/* Subtle decorative circles */}
+                  <div className="absolute -right-6 -bottom-6 w-32 h-32 bg-white/5 rounded-full blur-xl pointer-events-none" />
+                  <div className="absolute -left-6 -top-6 w-24 h-24 bg-white/5 rounded-full blur-lg pointer-events-none" />
+
+                  <div className="relative flex justify-between items-start gap-4">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-1.5 opacity-80">
+                        <Wallet className="w-4 h-4" />
+                        <span className="text-[10px] font-bold uppercase tracking-widest">Available Balance</span>
+                      </div>
+                      <div className="text-3xl font-black font-mono tracking-tight flex items-baseline gap-1.5">
+                        {(balance || 0).toLocaleString()}
+                        <span className="text-sm font-bold opacity-80">ETB</span>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => setIsWalletOpen(true)}
+                      className="bg-white/15 hover:bg-white/25 active:scale-95 transition-all text-white text-xs font-black py-2.5 px-4 rounded-2xl border border-white/10 flex items-center gap-1.5 cursor-pointer shadow-sm"
+                    >
+                      <span>Manage Wallet</span>
+                      <ArrowUpRight className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </div>
 
                 {/* Affiliate & Earnings Dashboard */}
-                <div className="bg-white dark:bg-gray-900 rounded-3xl p-6 border border-gray-100 dark:border-gray-800 shadow-sm transition-colors space-y-5">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-[11px] font-black uppercase text-gray-400 tracking-widest flex items-center gap-2">
-                        <Users className="w-4 h-4 text-blue-500" /> Passive Income
+                <div className="bg-white dark:bg-gray-900 rounded-3xl p-5 border border-gray-100 dark:border-gray-800/60 shadow-sm transition-colors space-y-4">
+                  <div className="flex items-center justify-between border-b border-gray-50 dark:border-gray-800/40 pb-3">
+                    <h3 className="text-xs font-black uppercase text-gray-400 dark:text-gray-500 tracking-widest flex items-center gap-2">
+                      <svg className="w-4 h-4 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> Passive Income
                     </h3>
+                    <span className="bg-green-500/10 text-green-500 text-[9px] font-black uppercase px-2 py-0.5 rounded-full tracking-wider border border-green-500/10">1% Comm.</span>
                   </div>
                   
                   {affiliateStats?.isFlagged && (
-                      <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 p-3 rounded-xl text-xs font-medium flex items-center gap-3">
+                      <div className="bg-red-50 dark:bg-red-950/20 text-red-600 dark:text-red-400 p-4 rounded-2xl text-xs font-bold flex items-center gap-3 border border-red-100 dark:border-red-900/30">
                           <AlertCircle className="w-5 h-5 shrink-0" />
                           <span>Account flagged for review. Payouts disabled.</span>
                       </div>
                   )}
                   
-                  <div className="grid grid-cols-2 gap-4">
-                      <div className="bg-gray-50 dark:bg-gray-800/50 p-4 rounded-2xl">
-                          <div className="text-[10px] font-bold text-gray-500">Total Referrals</div>
+                  <div className="grid grid-cols-2 gap-3.5">
+                      <div className="bg-gray-50 dark:bg-gray-800/30 p-4 rounded-2xl border border-gray-100 dark:border-gray-800/50">
+                          <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Total Referrals</div>
                           <div className="text-xl font-black text-gray-900 dark:text-white mt-1">
                             {affiliateStats?.totalReferrals || 0}
                           </div>
                       </div>
-                      <div className="bg-gray-50 dark:bg-gray-800/50 p-4 rounded-2xl">
-                          <div className="text-[10px] font-bold text-gray-500">Total Earned</div>
-                          <div className="text-xl font-black text-gray-900 dark:text-white mt-1">
-                            {(affiliateStats?.totalEarned || 0).toLocaleString()}
+                      <div className="bg-gray-50 dark:bg-gray-800/30 p-4 rounded-2xl border border-gray-100 dark:border-gray-800/50">
+                          <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Total Earned</div>
+                          <div className="text-xl font-black text-green-600 dark:text-green-400 mt-1 flex items-baseline gap-0.5">
+                            {(affiliateStats?.totalEarned || 0).toLocaleString()} <span className="text-[10px] font-bold text-gray-400">ETB</span>
                           </div>
                       </div>
                   </div>
 
-                  <div className="bg-blue-50 dark:bg-blue-950/20 p-4 rounded-2xl flex items-center justify-between border border-blue-100 dark:border-blue-900/50">
+                  <div className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/10 dark:to-indigo-900/10 p-4 rounded-2xl flex items-center justify-between border border-blue-100/40 dark:border-blue-900/20">
                     <div>
-                        <div className="text-[10px] font-bold text-blue-600 dark:text-blue-400">Available to Withdraw</div>
-                        <div className="text-2xl font-black text-blue-800 dark:text-blue-200 mt-0.5">
-                           {(affiliateStats?.availableBalance || 0).toLocaleString()} <span className="text-sm">ETB</span>
-                        </div>
+                      <div className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wide">Available to Payout</div>
+                      <div className="text-2xl font-black text-blue-800 dark:text-blue-200 mt-0.5 flex items-baseline gap-1">
+                         {(affiliateStats?.availableBalance || 0).toLocaleString()} <span className="text-xs font-bold text-blue-400 dark:text-blue-500">ETB</span>
+                      </div>
                     </div>
+
+                    <button
+                      onClick={() => {
+                          if (!affiliateStats?.availableBalance || affiliateStats.availableBalance < 1000) {
+                              showNotification("Minimum withdrawal is 1,000 ETB.", "error");
+                              return;
+                          }
+                          const reqAmt = prompt(`Enter amount to withdraw (Available: ${affiliateStats.availableBalance}):`);
+                          if (reqAmt) {
+                              const amt = parseInt(reqAmt, 10);
+                              if (isNaN(amt) || amt < 1000 || amt > affiliateStats.availableBalance) {
+                                  showNotification("Invalid amount. Minimum 1,000 ETB.", "error");
+                              } else {
+                                  socket?.emit('requestAffiliatePayout', userId, amt);
+                              }
+                          }
+                      }}
+                      disabled={affiliateStats?.isFlagged || (affiliateStats?.availableBalance || 0) < 1000}
+                      className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-black py-2.5 px-4 rounded-xl transition-all active:scale-95 shadow-md shadow-blue-600/10 flex justify-center items-center gap-1 cursor-pointer"
+                    >
+                      Request Payout
+                    </button>
                   </div>
-                  
-                  <button
-                    onClick={() => {
-                        if (!affiliateStats?.availableBalance || affiliateStats.availableBalance < 1000) {
-                            showNotification("Minimum withdrawal is 1,000 ETB.", "error");
-                            return;
-                        }
-                        const reqAmt = prompt(`Enter amount to withdraw (Available: ${affiliateStats.availableBalance}):`);
-                        if (reqAmt) {
-                            const amt = parseInt(reqAmt, 10);
-                            if (isNaN(amt) || amt < 1000 || amt > affiliateStats.availableBalance) {
-                                showNotification("Invalid amount. Minimum 1,000 ETB.", "error");
-                            } else {
-                                socket?.emit('requestAffiliatePayout', userId, amt);
-                            }
-                        }
-                    }}
-                    disabled={affiliateStats?.isFlagged || (affiliateStats?.availableBalance || 0) < 1000}
-                    className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-bold py-3 rounded-2xl transition-all active:scale-95 shadow-md shadow-blue-500/20"
-                  >
-                    Request Payout (Min 1,000)
-                  </button>
-                  
-                  <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-relaxed pt-2 border-t border-gray-100 dark:border-gray-800">
-                    Invite friends using your link in Telegram to earn <b>1% commission</b> on all their bets. Minimum payout is 1,000 ETB. Subject to manual review.
+                    
+                  <p className="text-[10px] text-gray-400 leading-relaxed pt-3 border-t border-gray-100 dark:border-gray-800/40 text-center">
+                    Share your unique link below to earn lifetime commissions.
                   </p>
                 </div>
 
@@ -1146,60 +1271,49 @@ export default function App() {
                   showNotification={showNotification}
                 />
 
-                {/* Profile Controls (Settings & Switches migrated here!) */}
-                <div className="bg-white dark:bg-gray-900 rounded-2xl p-4 border border-gray-200 dark:border-gray-800 transition-colors shadow-xs space-y-3">
-                  <h3 className="text-[10px] font-black uppercase text-gray-400 tracking-widest mb-1.5">Game Settings</h3>
+                {/* Profile Controls (Settings & Switches) */}
+                <div className="bg-white dark:bg-gray-900 rounded-3xl p-5 border border-gray-100 dark:border-gray-800/60 shadow-sm transition-colors space-y-4">
+                  <h3 className="text-xs font-black uppercase text-gray-400 dark:text-gray-500 tracking-widest flex items-center gap-2 border-b border-gray-50 dark:border-gray-800/40 pb-3">
+                    <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                    App Settings
+                  </h3>
                   
                   {/* Theme Switcher Row */}
-                  <div className="flex justify-between items-center py-1">
-                    <span className="text-xs font-bold text-gray-700 dark:text-gray-300">Visual Dark Mode</span>
+                  <div className="flex justify-between items-center py-2 border-b border-gray-50 dark:border-gray-800/40">
+                    <span className="text-sm font-bold text-gray-800 dark:text-gray-200">Visual Appearance</span>
                     <button 
                       onClick={() => setIsDarkMode(!isDarkMode)}
-                      className="p-1.5 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors cursor-pointer"
+                      className="px-3 py-1.5 rounded-full bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors cursor-pointer"
                     >
                       {isDarkMode ? (
-                        <span className="flex items-center gap-1.5 text-xs font-black">
-                          <Sun className="w-3.5 h-3.5 text-yellow-500" /> Sun Theme
+                        <span className="flex items-center gap-2 text-xs font-black">
+                          <Sun className="w-4 h-4 text-yellow-500" /> Light
                         </span>
                       ) : (
-                        <span className="flex items-center gap-1.5 text-xs font-black">
-                          <Moon className="w-3.5 h-3.5 text-blue-500" /> Dark Theme
+                        <span className="flex items-center gap-2 text-xs font-black">
+                          <Moon className="w-4 h-4 text-blue-500" /> Dark
                         </span>
                       )}
                     </button>
                   </div>
 
                   {/* Sound Ticks switch */}
-                  <div className="flex justify-between items-center py-1 border-t border-gray-100 dark:border-gray-800/40">
-                    <span className="text-xs font-bold text-gray-700 dark:text-gray-300">Wheel Ticks Audio</span>
+                  <div className="flex justify-between items-center py-2 border-b border-gray-50 dark:border-gray-800/40">
+                    <span className="text-sm font-bold text-gray-800 dark:text-gray-200">Wheel Ticks Audio</span>
                     <label className="relative inline-flex items-center cursor-pointer">
                       <input type="checkbox" checked={soundTicks} onChange={e => setSoundTicks(e.target.checked)} className="sr-only peer" />
-                      <div className="w-9 h-5 bg-gray-300 dark:bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                      <div className="w-11 h-6 bg-gray-200 dark:bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
                     </label>
                   </div>
 
                   {/* Win/Loss alert switch */}
-                  <div className="flex justify-between items-center py-1 border-t border-gray-100 dark:border-gray-800/40">
-                    <span className="text-xs font-bold text-gray-700 dark:text-gray-300">Win/Loss Alerts Sound</span>
+                  <div className="flex justify-between items-center py-2">
+                    <span className="text-sm font-bold text-gray-800 dark:text-gray-200">Game Alerts Sound</span>
                     <label className="relative inline-flex items-center cursor-pointer">
                       <input type="checkbox" checked={soundAlerts} onChange={e => setSoundAlerts(e.target.checked)} className="sr-only peer" />
-                      <div className="w-9 h-5 bg-gray-300 dark:bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                      <div className="w-11 h-6 bg-gray-200 dark:bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
                     </label>
                   </div>
-                </div>
-
-                {/* Helpful Guide / Onboarding Tutorial access */}
-                <div className="bg-white dark:bg-gray-900 rounded-2xl p-4 border border-gray-200 dark:border-gray-800 transition-colors shadow-xs">
-                  <h3 className="text-[10px] font-black uppercase text-gray-400 tracking-widest mb-2">Tutorial Guide</h3>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed mb-3">
-                    Want to learn how the game mechanics works or read about shortcut key bindings? Open the helper popup tutorial below.
-                  </p>
-                  <button 
-                    onClick={() => setShowOnboarding(true)}
-                    className="w-full bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/40 dark:hover:bg-blue-900/40 text-blue-600 dark:text-blue-400 font-bold py-2 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer border border-blue-200/50 dark:border-blue-900/50"
-                  >
-                    <HelpCircle className="w-4 h-4" /> Open How to Play Tutorial
-                  </button>
                 </div>
             </div>
 
@@ -1243,40 +1357,24 @@ export default function App() {
               <Dices className="w-5 h-5" />
               <span className="text-[10px] tracking-tight font-black uppercase">ፈጣን</span>
             </button>
+
+            <button
+              onClick={() => setActiveTab('bingo')}
+              className={`flex flex-col items-center gap-0.5 flex-1 py-0.5 transition-all cursor-pointer ${
+                activeTab === 'bingo' 
+                  ? 'text-blue-600 dark:text-blue-400 scale-105 font-black' 
+                  : 'text-gray-400 hover:text-gray-500'
+              }`}
+            >
+              <Grid3X3 className="w-5 h-5" />
+              <span className="text-[10px] tracking-tight font-black uppercase">ቢንጎ</span>
+            </button>
           </nav>
         )}
 
       </div>
 
-      {/* Onboarding Dialog modal */}
-      {showOnboarding && (
-        <div className="absolute inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-xs animate-in fade-in duration-200 p-4">
-          <div className="bg-white dark:bg-gray-900 w-full max-w-xs rounded-2xl p-5 shadow-2xl border border-gray-200 dark:border-gray-800">
-            <h2 className="text-lg font-black text-gray-900 dark:text-white mb-3 flex items-center gap-2">
-              <HelpCircle className="w-5 h-5 text-blue-500" /> Welcome to Wheel Bet!
-            </h2>
-            <div className="space-y-3 text-gray-700 dark:text-gray-300 text-xs leading-relaxed">
-              <p>
-                <strong>Even (ሞላ):</strong> Bet that the wheel lands on an even number (2, 4, 6).<br/>
-                <strong>Odd (ጎደል):</strong> Bet that the wheel lands on an odd number (1, 3, 5).
-              </p>
-              <p>
-                <strong>Custom Amounts:</strong> Type any amount or use keys <kbd className="bg-gray-200 dark:bg-gray-800 px-1.5 py-0.5 rounded">1</kbd>, <kbd className="bg-gray-200 dark:bg-gray-800 px-1.5 py-0.5 rounded">2</kbd>, <kbd className="bg-gray-200 dark:bg-gray-800 px-1.5 py-0.5 rounded">5</kbd>, <kbd className="bg-gray-200 dark:bg-gray-800 px-1.5 py-0.5 rounded">0</kbd> to quick-select 1k, 2k, 5k, 10k.
-              </p>
-              <p>
-                <strong>Quick Play:</strong> Press <kbd className="bg-gray-200 dark:bg-gray-800 px-1.5 py-0.5 rounded">Enter</kbd> to quickly place a bet on Even, or press <kbd className="bg-gray-200 dark:bg-gray-800 px-1.5 py-0.5 rounded">E</kbd> for Even / <kbd className="bg-gray-200 dark:bg-gray-800 px-1.5 py-0.5 rounded">O</kbd> for Odd.
-              </p>
-            </div>
-            
-            <button onClick={() => {
-              setShowOnboarding(false);
-              localStorage.setItem('onboardingSeen', 'true');
-            }} className="w-full mt-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black text-xs transition-colors cursor-pointer">
-              Got it, let's play!
-            </button>
-          </div>
-        </div>
-      )}
+
 
       {/* Wallet Portal Drawer */}
       <AnimatePresence>
@@ -1309,7 +1407,7 @@ export default function App() {
                   <div>
                     <h2 className="text-base font-black text-gray-900 dark:text-white leading-tight font-sans">Interactive Wallet Ledger</h2>
                     <p className="text-xs font-bold text-gray-500 dark:text-gray-400">
-                      Balance: <span className="font-mono text-amber-500 font-extrabold">{balance.toLocaleString()} ETB</span>
+                      Balance: <span className="font-mono text-amber-500 font-extrabold">{balance === null ? '...' : (balance || 0).toLocaleString()} ETB</span>
                     </p>
                   </div>
                 </div>

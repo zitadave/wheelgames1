@@ -1,10 +1,12 @@
 import express from "express";
 import path from "path";
 import cors from "cors";
+import compression from "compression";
 import { createServer as createViteServer } from "vite";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import { initGameEngine } from "./src/server/GameEngine.js";
+import { initBingoEngine } from "./src/server/BingoEngine.js";
 import { initTelegramBot, getBotUsername, getBotLogs, triggerBotFlow } from "./src/server/telegramBot.js";
 import { fetchLeaderboardData } from "./src/server/leaderboardHelper.js";
 import dotenv from "dotenv";
@@ -17,6 +19,7 @@ async function startServer() {
   const app = express();
   app.set('trust proxy', 1);
   app.use(cors());
+  app.use(compression());
   app.use(express.json());
   const PORT = 3000;
   
@@ -25,11 +28,17 @@ async function startServer() {
     cors: {
       origin: "*",
       methods: ["GET", "POST"],
-    }
+    },
+    perMessageDeflate: {
+      threshold: 1024, // Only compress if over 1KB
+    },
+    pingInterval: 25000,
+    pingTimeout: 60000,
   });
 
   // Initialize Game Engine with Socket.IO
   initGameEngine(io);
+  initBingoEngine(io);
   
   // Initialize Telegram Bot in the background (non-blocking)
   initTelegramBot(io).catch(err => {

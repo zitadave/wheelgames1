@@ -1323,7 +1323,7 @@ export default function App() {
         {!isJackpotTheaterMode && (
           <nav id="bottom-navigation-bar" className="fixed bottom-0 left-0 right-0 bg-white/95 dark:bg-gray-900/95 backdrop-blur-md border-t border-gray-200 dark:border-gray-800 flex justify-around items-center py-1.5 px-1 z-40 transition-colors duration-300 shadow-lg shrink-0 w-full max-w-md mx-auto">
             <button
-              onClick={() => setActiveTab('even_odd')}
+              onClick={() => { unlockBingoAudio(); resumeAudio(); setActiveTab('even_odd'); }}
               className={`flex flex-col items-center gap-0.5 flex-1 py-0.5 transition-all cursor-pointer ${
                 activeTab === 'even_odd' 
                   ? 'text-blue-600 dark:text-blue-400 scale-105 font-black' 
@@ -1335,7 +1335,7 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => setActiveTab('jackpot')}
+              onClick={() => { unlockBingoAudio(); resumeAudio(); setActiveTab('jackpot'); }}
               className={`flex flex-col items-center gap-0.5 flex-1 py-0.5 transition-all cursor-pointer ${
                 activeTab === 'jackpot' 
                   ? 'text-blue-600 dark:text-blue-400 scale-105 font-black' 
@@ -1347,7 +1347,7 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => setActiveTab('chance')}
+              onClick={() => { unlockBingoAudio(); resumeAudio(); setActiveTab('chance'); }}
               className={`flex flex-col items-center gap-0.5 flex-1 py-0.5 transition-all cursor-pointer ${
                 activeTab === 'chance' 
                   ? 'text-blue-600 dark:text-blue-400 scale-105 font-black' 
@@ -1359,7 +1359,7 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => setActiveTab('bingo')}
+              onClick={() => { unlockBingoAudio(); resumeAudio(); setActiveTab('bingo'); }}
               className={`flex flex-col items-center gap-0.5 flex-1 py-0.5 transition-all cursor-pointer ${
                 activeTab === 'bingo' 
                   ? 'text-blue-600 dark:text-blue-400 scale-105 font-black' 

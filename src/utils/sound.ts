@@ -161,6 +161,26 @@ export function stopCurrentAudio() {
   }
 }
 
+async function safeDecodeAudioData(arrayBuffer: ArrayBuffer): Promise<AudioBuffer> {
+  if (!audioCtx) {
+    throw new Error("No AudioContext available");
+  }
+  return new Promise<AudioBuffer>((resolve, reject) => {
+    try {
+      const promise = audioCtx.decodeAudioData(
+        arrayBuffer,
+        (buffer) => resolve(buffer),
+        (error) => reject(error)
+      );
+      if (promise && typeof promise.catch === 'function') {
+        promise.catch((err) => reject(err));
+      }
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 export async function playAudioUrl(url: string, onEnded?: () => void): Promise<void> {
   if (!audioCtx) {
     if (onEnded) onEnded();
@@ -186,7 +206,7 @@ export async function playAudioUrl(url: string, onEnded?: () => void): Promise<v
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       const arrayBuffer = await response.arrayBuffer();
-      buffer = await audioCtx.decodeAudioData(arrayBuffer);
+      buffer = await safeDecodeAudioData(arrayBuffer);
       decodedCache.set(url, buffer);
     }
 

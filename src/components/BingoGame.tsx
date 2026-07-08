@@ -77,22 +77,22 @@ const playNextAudio = () => {
   }
 
   // Triple-redundant cascade for mobile, web, and Telegram WebApp environments:
-  // 1. Reusable pre-unlocked HTML5 Audio (extremely reliable across Safari/Chrome/Firefox/WebView on user tap)
-  // 2. Web Audio API Buffer-decoder (fallback if element source loading is blocked or interrupted)
+  // 1. Web Audio API Buffer-decoder (most robust on Safari/Chrome/Firefox/WebView once unlocked by any gesture)
+  // 2. Reusable pre-unlocked HTML5 Audio (backup)
   // 3. High-compatibility Amharic TTS engine (safe ultimate fallback to voice)
-  playAudioViaElement(
-    url,
-    () => {
-      // Successfully played
-      playNextAudio();
-    },
-    (elementErr) => {
-      console.warn("Primary HTML5 Audio failed, falling back to Web Audio API:", elementErr);
-      playAudioUrl(url, () => {
-        // Success on Web Audio API
+  playAudioUrl(url, () => {
+    // Successfully played
+    playNextAudio();
+  }).catch(webAudioErr => {
+    console.warn("Primary Web Audio API failed, falling back to HTML5 Audio:", webAudioErr);
+    playAudioViaElement(
+      url,
+      () => {
+        // Successfully played via element
         playNextAudio();
-      }).catch(webAudioErr => {
-        console.warn("Web Audio API also failed, falling back to speech synthesis:", webAudioErr);
+      },
+      (elementErr) => {
+        console.warn("HTML5 Audio also failed, falling back to speech synthesis:", elementErr);
         if (item.type === 'ball') {
           fallbackToTTS(item.ball, () => {
             playNextAudio();
@@ -100,9 +100,9 @@ const playNextAudio = () => {
         } else {
           playNextAudio();
         }
-      });
-    }
-  );
+      }
+    );
+  });
 };
 
 const queueAudioItem = (item: { type: 'event', src: string } | { type: 'ball', ball: number }, enabled: boolean) => {
@@ -276,6 +276,7 @@ export const BingoGame: React.FC<BingoGameProps> = ({ socket, userId, username, 
   }, [roomState?.status]);
 
   const toggleManualMark = (cardId: number, num: number) => {
+    unlockBingoAudio();
     if (highlightMode !== 'manual') return;
     
     // When a number is clicked, mark/unmark it across ALL selected cards simultaneously
@@ -323,6 +324,7 @@ export const BingoGame: React.FC<BingoGameProps> = ({ socket, userId, username, 
   }, [roomState?.players, userId, roomState?.status]);
 
   const toggleCard = (cardId: number) => {
+    unlockBingoAudio();
     if (roomState?.status !== 'lobby') {
       showNotification("Game already in progress. Wait for next round.", "info");
       return;
@@ -375,6 +377,7 @@ export const BingoGame: React.FC<BingoGameProps> = ({ socket, userId, username, 
   };
 
   const handleClaimBingo = () => {
+    unlockBingoAudio();
     if (!selectedRoomId) return;
     socket?.emit('bingo_claim', { roomId: selectedRoomId, userId }, (res: any) => {
       if (res.success) {

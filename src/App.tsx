@@ -5,7 +5,7 @@ import { Wheel } from './components/Wheel';
 import { JackpotArena } from './components/JackpotArena';
 import { WheelOfChance } from './components/WheelOfChance';
 import { Leaderboard } from './components/Leaderboard';
-import { BingoGame } from './components/BingoGame';
+import { BingoGame, unlockBingoAudio } from './components/BingoGame';
 import { ChevronLeft, Users, Clock, History, AlertCircle, Coins, Moon, Sun, Settings, X, HelpCircle, Search, Trophy, Gamepad2, TrendingUp, Wallet, User, Plus, ArrowUpRight, ArrowDownLeft, Copy, Check, ChevronRight, Dices, Binary, RefreshCw, Info, Award, Grid3X3, Volume2, VolumeX } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { playWin, playLoss, suspendAudio, resumeAudio } from './utils/sound';
@@ -822,7 +822,7 @@ export default function App() {
                   
                   {activeTab === 'bingo' && bingoRoomState && (bingoRoomState.status === 'playing' || bingoRoomState.status === 'result') && !(!selectedBingoRoomId) && (
                     <button
-                      onClick={() => setBingoSoundEnabled(!bingoSoundEnabled)}
+                      onClick={() => { unlockBingoAudio(); setBingoSoundEnabled(!bingoSoundEnabled); }}
                       className="p-1.5 rounded-full bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-green-500 hover:text-green-600 dark:text-green-400 dark:hover:text-green-300 border border-gray-200 dark:border-gray-700 transition-all active:scale-95 cursor-pointer flex items-center justify-center w-8 h-8 shrink-0 select-none animate-in fade-in duration-300"
                       title={bingoSoundEnabled ? "Mute Caller Voice" : "Unmute Caller Voice"}
                     >

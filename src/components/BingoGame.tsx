@@ -13,13 +13,56 @@ const audioQueue: QueueItem[] = [];
 let isPlayingAudio = false;
 let currentAudioElement: HTMLAudioElement | null = null;
 
+// Audio context and user-gesture unlocking for mobile/Telegram WebApp
+let audioUnlocked = false;
+
+export const unlockBingoAudio = () => {
+  if (audioUnlocked) return;
+  try {
+    const dummy = new Audio();
+    // silent tiny WAV file to trigger audio system activation
+    dummy.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAAA";
+    const playPromise = dummy.play();
+    if (playPromise !== undefined) {
+      playPromise.then(() => {
+        audioUnlocked = true;
+        console.log("Audio successfully unlocked on user gesture");
+      }).catch(e => {
+        console.warn("Silent audio play failed to unlock:", e);
+      });
+    }
+  } catch (e) {
+    console.warn("Error unlocking audio:", e);
+  }
+};
+
+if (typeof document !== 'undefined') {
+  const triggerUnlock = () => {
+    unlockBingoAudio();
+    document.removeEventListener('click', triggerUnlock);
+    document.removeEventListener('touchstart', triggerUnlock);
+  };
+  document.addEventListener('click', triggerUnlock, { passive: true });
+  document.addEventListener('touchstart', triggerUnlock, { passive: true });
+}
+
 const clearAudioQueue = () => {
   audioQueue.length = 0;
   if (currentAudioElement) {
-    currentAudioElement.pause();
+    try {
+      currentAudioElement.pause();
+    } catch (e) {
+      console.warn("Pause audio element failed:", e);
+    }
     currentAudioElement = null;
   }
-  window.speechSynthesis.cancel();
+  if (typeof window !== 'undefined' && window.speechSynthesis) {
+    try {
+      window.speechSynthesis.cancel();
+    } catch (e) {
+      console.warn("speechSynthesis.cancel failed:", e);
+    }
+  }
   isPlayingAudio = false;
 };
 
@@ -52,7 +95,7 @@ const playNextAudio = () => {
     }
   };
   currentAudioElement.play().catch(err => {
-    console.warn("Audio play failed", err);
+    console.warn("Audio play failed, playing via fallback to TTS", err);
     currentAudioElement = null;
     if (item.type === 'ball') {
       fallbackToTTS(item.ball, () => {
@@ -69,6 +112,9 @@ const queueAudioItem = (item: { type: 'event', src: string } | { type: 'ball', b
     clearAudioQueue();
     return;
   }
+
+  // Ensure sound is active on any item queuing
+  unlockBingoAudio();
 
   let audio: HTMLAudioElement | undefined;
   try {
@@ -117,35 +163,45 @@ const fallbackToTTS = (ball: number, onEnd: () => void) => {
   const numAmh = amharicNumbers[ball] || ball.toString();
   const textToSpeak = `${letterAmh} ${numAmh}`;
   
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(textToSpeak);
-  const voices = window.speechSynthesis.getVoices();
-  
-  const amharicVoices = voices.filter(v => v.lang.startsWith('am'));
-  let chosenVoice = amharicVoices.find(v => v.name.toLowerCase().includes('male') || v.name.toLowerCase().includes('david') || v.name.toLowerCase().includes('google'));
-  if (!chosenVoice && amharicVoices.length > 0) {
-    chosenVoice = amharicVoices[0];
-  }
-  
-  if (chosenVoice) {
-    utterance.voice = chosenVoice;
-    utterance.lang = chosenVoice.lang;
-  } else {
-    utterance.lang = 'am-ET';
-  }
+  if (typeof window !== 'undefined' && window.speechSynthesis && typeof SpeechSynthesisUtterance !== 'undefined') {
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(textToSpeak);
+      const voices = window.speechSynthesis.getVoices();
+      
+      const amharicVoices = voices.filter(v => v.lang && v.lang.startsWith('am'));
+      let chosenVoice = amharicVoices.find(v => v.name && (v.name.toLowerCase().includes('male') || v.name.toLowerCase().includes('david') || v.name.toLowerCase().includes('google')));
+      if (!chosenVoice && amharicVoices.length > 0) {
+        chosenVoice = amharicVoices[0];
+      }
+      
+      if (chosenVoice) {
+        utterance.voice = chosenVoice;
+        utterance.lang = chosenVoice.lang;
+      } else {
+        utterance.lang = 'am-ET';
+      }
 
-  utterance.pitch = 0.75;
-  utterance.rate = 0.78;
-  utterance.volume = 1.0;
+      utterance.pitch = 0.75;
+      utterance.rate = 0.78;
+      utterance.volume = 1.0;
+      
+      utterance.onend = () => {
+        onEnd();
+      };
+      utterance.onerror = () => {
+        onEnd();
+      };
+      
+      window.speechSynthesis.speak(utterance);
+      return;
+    } catch (e) {
+      console.warn("Speech synthesis execution failed, bypassing", e);
+    }
+  }
   
-  utterance.onend = () => {
-    onEnd();
-  };
-  utterance.onerror = () => {
-    onEnd();
-  };
-  
-  window.speechSynthesis.speak(utterance);
+  // Safe instant fallback callback to keep the queue running when Speech Synthesis is missing
+  onEnd();
 };
 
 interface BingoGameProps {
@@ -757,7 +813,7 @@ export const BingoGame: React.FC<BingoGameProps> = ({ socket, userId, username, 
                             : '--'}
                          </span>
                       </div>
-                      <button onClick={() => setSoundEnabled(!soundEnabled)} className="absolute -right-3 top-1/2 -translate-y-1/2 p-1.5 text-green-400 active:scale-90 transition-transform">
+                      <button onClick={() => { unlockBingoAudio(); setSoundEnabled(!soundEnabled); }} className="absolute -right-3 top-1/2 -translate-y-1/2 p-1.5 text-green-400 active:scale-90 transition-transform">
                          {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
                       </button>
                    </div>

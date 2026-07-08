@@ -4,14 +4,14 @@ import { BingoRoomState } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
 import { Users, Clock, History, AlertCircle, Coins, ChevronLeft, Volume2, VolumeX, RefreshCw, RotateCw, HelpCircle, X } from 'lucide-react';
 import { getDeterministicCard } from '../utils/bingo';
+import { playAudioUrl, stopCurrentAudio, resumeAudio } from '../utils/sound';
 
 type QueueItem = 
-  | { type: 'event', src: string, audio: HTMLAudioElement }
-  | { type: 'ball', ball: number, audio: HTMLAudioElement };
+  | { type: 'event', src: string }
+  | { type: 'ball', ball: number };
 
 const audioQueue: QueueItem[] = [];
 let isPlayingAudio = false;
-let currentAudioElement: HTMLAudioElement | null = null;
 
 // Audio context and user-gesture unlocking for mobile/Telegram WebApp
 let audioUnlocked = false;
@@ -19,18 +19,9 @@ let audioUnlocked = false;
 export const unlockBingoAudio = () => {
   if (audioUnlocked) return;
   try {
-    const dummy = new Audio();
-    // silent tiny WAV file to trigger audio system activation
-    dummy.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAAA";
-    const playPromise = dummy.play();
-    if (playPromise !== undefined) {
-      playPromise.then(() => {
-        audioUnlocked = true;
-        console.log("Audio successfully unlocked on user gesture");
-      }).catch(e => {
-        console.warn("Silent audio play failed to unlock:", e);
-      });
-    }
+    resumeAudio();
+    audioUnlocked = true;
+    console.log("Bingo audio successfully unlocked on user gesture");
   } catch (e) {
     console.warn("Error unlocking audio:", e);
   }
@@ -48,13 +39,10 @@ if (typeof document !== 'undefined') {
 
 const clearAudioQueue = () => {
   audioQueue.length = 0;
-  if (currentAudioElement) {
-    try {
-      currentAudioElement.pause();
-    } catch (e) {
-      console.warn("Pause audio element failed:", e);
-    }
-    currentAudioElement = null;
+  try {
+    stopCurrentAudio();
+  } catch (e) {
+    console.warn("stopCurrentAudio failed:", e);
   }
   if (typeof window !== 'undefined' && window.speechSynthesis) {
     try {
@@ -79,24 +67,17 @@ const playNextAudio = () => {
     return;
   }
 
-  currentAudioElement = item.audio;
-  currentAudioElement.onended = () => {
-    currentAudioElement = null;
+  let url = '';
+  if (item.type === 'event') {
+    url = item.src;
+  } else {
+    url = `/bingo_audio/${item.ball}.mp3`;
+  }
+
+  playAudioUrl(url, () => {
     playNextAudio();
-  };
-  currentAudioElement.onerror = () => {
-    currentAudioElement = null;
-    if (item.type === 'ball') {
-      fallbackToTTS(item.ball, () => {
-        playNextAudio();
-      });
-    } else {
-      playNextAudio();
-    }
-  };
-  currentAudioElement.play().catch(err => {
-    console.warn("Audio play failed, playing via fallback to TTS", err);
-    currentAudioElement = null;
+  }).catch(err => {
+    console.warn("playAudioUrl failed, playing via fallback to TTS", err);
     if (item.type === 'ball') {
       fallbackToTTS(item.ball, () => {
         playNextAudio();
@@ -116,22 +97,7 @@ const queueAudioItem = (item: { type: 'event', src: string } | { type: 'ball', b
   // Ensure sound is active on any item queuing
   unlockBingoAudio();
 
-  let audio: HTMLAudioElement | undefined;
-  try {
-    if (item.type === 'event') {
-      audio = new Audio(item.src);
-    } else {
-      const extension = (item.ball === 3 || item.ball === 4) ? 'm4a' : 'mp3';
-      audio = new Audio(`/bingo_audio/${item.ball}.${extension}`);
-    }
-    audio.preload = 'auto';
-  } catch(e) {
-    console.warn("Could not preload audio", e);
-  }
-
-  if (!audio) return;
-  
-  audioQueue.push({ ...item, audio } as QueueItem);
+  audioQueue.push(item);
   
   if (!isPlayingAudio) {
     playNextAudio();

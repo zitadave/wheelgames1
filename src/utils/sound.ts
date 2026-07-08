@@ -1,15 +1,39 @@
 const AudioContextClass = typeof window !== 'undefined' ? ((window as any).AudioContext || (window as any).webkitAudioContext) : null;
 export const audioCtx = AudioContextClass ? new AudioContextClass() : null;
 
-// Unify unlocking of Web Audio API
-if (typeof document !== 'undefined' && audioCtx) {
-  const unlockAudioContext = () => {
-    if (audioCtx.state === 'suspended') {
+// Reusable, pre-unlocked global HTML5 Audio element for playing URL-based caller voices
+let globalUnlockedAudio: HTMLAudioElement | null = null;
+
+export function initUnlockedAudio() {
+  if (typeof window === 'undefined') return;
+  if (!globalUnlockedAudio) {
+    try {
+      globalUnlockedAudio = new Audio();
+      // Use a tiny, silent 1-second WAV to trigger activation of the audio engine
+      globalUnlockedAudio.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAAA";
+      globalUnlockedAudio.play().then(() => {
+        console.log("Global pre-unlocked audio element successfully initialized");
+      }).catch(err => {
+        console.warn("Global pre-unlocked audio element initial silent play rejected:", err);
+      });
+    } catch (e) {
+      console.warn("Failed to initialize global pre-unlocked audio element:", e);
+    }
+  }
+}
+
+// Unify unlocking of Web Audio API and HTML5 Audio
+if (typeof document !== 'undefined') {
+  const unlockAllAudio = () => {
+    // 1. Resume Web Audio API
+    if (audioCtx && audioCtx.state === 'suspended') {
       audioCtx.resume().catch(() => {});
     }
+    // 2. Initialize and trigger the pre-unlocked HTML5 Audio element
+    initUnlockedAudio();
   };
-  document.addEventListener('click', unlockAudioContext, { passive: true });
-  document.addEventListener('touchstart', unlockAudioContext, { passive: true });
+  document.addEventListener('click', unlockAllAudio, { passive: true });
+  document.addEventListener('touchstart', unlockAllAudio, { passive: true });
 }
 
 export function suspendAudio() {
@@ -22,6 +46,7 @@ export function resumeAudio() {
   if (audioCtx && audioCtx.state === 'suspended') {
     audioCtx.resume().catch(() => {});
   }
+  initUnlockedAudio();
 }
 
 export function playTick() {
@@ -186,5 +211,58 @@ export async function playAudioUrl(url: string, onEnded?: () => void): Promise<v
     if (onEnded) {
       onEnded();
     }
+  }
+}
+
+export function stopAudioViaElement() {
+  if (globalUnlockedAudio) {
+    try {
+      globalUnlockedAudio.pause();
+    } catch (e) {}
+  }
+}
+
+export function playAudioViaElement(url: string, onEnded?: () => void, onError?: (err: any) => void) {
+  if (typeof window === 'undefined') {
+    if (onEnded) onEnded();
+    return;
+  }
+
+  if (!globalUnlockedAudio) {
+    initUnlockedAudio();
+  }
+
+  if (globalUnlockedAudio) {
+    // Clear previous event listeners to avoid memory leaks or duplicate triggers
+    globalUnlockedAudio.onended = null;
+    globalUnlockedAudio.onerror = null;
+
+    try {
+      globalUnlockedAudio.pause();
+    } catch (e) {}
+
+    globalUnlockedAudio.src = url;
+
+    globalUnlockedAudio.onended = () => {
+      if (onEnded) onEnded();
+    };
+
+    globalUnlockedAudio.onerror = (e) => {
+      console.warn("Audio element error on playing:", url, e);
+      if (onError) onError(e);
+      else if (onEnded) onEnded();
+    };
+
+    const playPromise = globalUnlockedAudio.play();
+    if (playPromise !== undefined) {
+      playPromise.catch(err => {
+        console.warn("Audio element play failed for:", url, err);
+        if (onError) onError(err);
+        else if (onEnded) onEnded();
+      });
+    }
+  } else {
+    if (onError) onError(new Error("No audio element available"));
+    else if (onEnded) onEnded();
   }
 }

@@ -4,7 +4,7 @@ import { BingoRoomState } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
 import { Users, Clock, History, AlertCircle, Coins, ChevronLeft, Volume2, VolumeX, RefreshCw, RotateCw, HelpCircle, X } from 'lucide-react';
 import { getDeterministicCard } from '../utils/bingo';
-import { playAudioUrl, stopCurrentAudio, resumeAudio } from '../utils/sound';
+import { playAudioUrl, stopCurrentAudio, resumeAudio, playAudioViaElement, stopAudioViaElement, initUnlockedAudio } from '../utils/sound';
 
 type QueueItem = 
   | { type: 'event', src: string }
@@ -20,6 +20,7 @@ export const unlockBingoAudio = () => {
   if (audioUnlocked) return;
   try {
     resumeAudio();
+    initUnlockedAudio();
     audioUnlocked = true;
     console.log("Bingo audio successfully unlocked on user gesture");
   } catch (e) {
@@ -41,6 +42,7 @@ const clearAudioQueue = () => {
   audioQueue.length = 0;
   try {
     stopCurrentAudio();
+    stopAudioViaElement();
   } catch (e) {
     console.warn("stopCurrentAudio failed:", e);
   }
@@ -74,18 +76,33 @@ const playNextAudio = () => {
     url = `/bingo_audio/${item.ball}.mp3`;
   }
 
-  playAudioUrl(url, () => {
-    playNextAudio();
-  }).catch(err => {
-    console.warn("playAudioUrl failed, playing via fallback to TTS", err);
-    if (item.type === 'ball') {
-      fallbackToTTS(item.ball, () => {
-        playNextAudio();
-      });
-    } else {
+  // Triple-redundant cascade for mobile, web, and Telegram WebApp environments:
+  // 1. Reusable pre-unlocked HTML5 Audio (extremely reliable across Safari/Chrome/Firefox/WebView on user tap)
+  // 2. Web Audio API Buffer-decoder (fallback if element source loading is blocked or interrupted)
+  // 3. High-compatibility Amharic TTS engine (safe ultimate fallback to voice)
+  playAudioViaElement(
+    url,
+    () => {
+      // Successfully played
       playNextAudio();
+    },
+    (elementErr) => {
+      console.warn("Primary HTML5 Audio failed, falling back to Web Audio API:", elementErr);
+      playAudioUrl(url, () => {
+        // Success on Web Audio API
+        playNextAudio();
+      }).catch(webAudioErr => {
+        console.warn("Web Audio API also failed, falling back to speech synthesis:", webAudioErr);
+        if (item.type === 'ball') {
+          fallbackToTTS(item.ball, () => {
+            playNextAudio();
+          });
+        } else {
+          playNextAudio();
+        }
+      });
     }
-  });
+  );
 };
 
 const queueAudioItem = (item: { type: 'event', src: string } | { type: 'ball', ball: number }, enabled: boolean) => {
